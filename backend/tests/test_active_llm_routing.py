@@ -11,6 +11,7 @@ class RecordingClient:
     def __init__(self) -> None:
         self.generate_calls: list[tuple[str, str]] = []
         self.chat_calls: list[dict] = []
+        self.chat_response_calls: list[dict] = []
 
     async def generate(self, model: str, prompt: str, **kwargs) -> str:
         self.generate_calls.append((model, prompt))
@@ -21,6 +22,10 @@ class RecordingClient:
             {"model": model, "prompt": prompt, **kwargs}
         )
         return "vision ok"
+
+    async def chat_response(self, model: str, **kwargs) -> dict:
+        self.chat_response_calls.append({"model": model, **kwargs})
+        return {"content": "ok", "thinking": "", "tool_calls": []}
 
 
 class RecordingProvider:
@@ -76,7 +81,13 @@ async def test_director_plan_provider_uses_injected_active_provider(monkeypatch)
     )
 
     assert result == "ok"
-    assert active.client.generate_calls == [("catalog-model", "SKILLED")]
+    assert active.client.generate_calls == []
+    assert len(active.client.chat_response_calls) == 1
+    call = active.client.chat_response_calls[0]
+    assert call["model"] == "catalog-model"
+    assert call["format"] == "json"
+    assert call["options"] == {"enable_thinking": False}
+    assert call["messages"] == [{"role": "user", "content": "SKILLED"}]
     assert composed == [("SYSTEM\n\nUSER", ("script-planning",))]
 
 

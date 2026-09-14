@@ -109,6 +109,7 @@ def _unsupported_feature(
             "unknown parameter",
             "unrecognized",
             "extra_forbidden",
+            "not implemented",
         )
     )
     if not rejection:
@@ -122,7 +123,12 @@ def _unsupported_feature(
         return "tools"
     if has_format and any(
         marker in text
-        for marker in ("response_format", "json_schema", "structured output")
+        for marker in (
+            "response_format",
+            "json_schema",
+            "structured output",
+            "not implemented",
+        )
     ):
         return "response_format"
     return None
@@ -164,6 +170,8 @@ def _request_options(options: dict[str, Any] | None) -> dict[str, Any]:
         "presence_penalty",
         "frequency_penalty",
         "max_tokens",
+        "enable_thinking",
+        "reasoning_effort",
     }
     result = {key: value for key, value in options.items() if key in allowed}
     if "max_tokens" not in result and options.get("num_predict") is not None:
@@ -231,6 +239,13 @@ class OpenAICompatibleClient:
             "stream": False,
             **_request_options(options),
         }
+        # Server-side thinking controls are not SDK params; pass via extra_body.
+        extra_body: dict[str, Any] = {}
+        for key in ("enable_thinking", "reasoning_effort"):
+            if key in request:
+                extra_body[key] = request.pop(key)
+        if extra_body:
+            request["extra_body"] = extra_body
         if tools:
             request["tools"] = list(tools)
         converted_format = _response_format(format)
@@ -241,24 +256,30 @@ class OpenAICompatibleClient:
         try:
             response = await self._client.chat.completions.create(**request)
         except APIStatusError as exc:
-            feature = _unsupported_feature(
-                exc,
-                has_tools=bool(tools),
-                has_format=converted_format is not None,
-                has_images=has_images,
-            )
-            if feature == "response_format":
-                retry = dict(request)
-                retry.pop("response_format", None)
-                retry["messages"] = _append_instruction(
-                    messages,
-                    _json_instruction(format),
-                )
-                response = await self._client.chat.completions.create(**retry)
-            elif feature in {"tools", "vision"}:
-                raise UnsupportedLLMFeatureError(feature, _error_text(exc)) from exc
+            if request.get("extra_body") and (
+                "enable_thinking" in _error_text(exc).lower()
+            ):
+                request.pop("extra_body", None)
+                response = await self._client.chat.completions.create(**request)
             else:
-                raise
+                feature = _unsupported_feature(
+                    exc,
+                    has_tools=bool(tools),
+                    has_format=converted_format is not None,
+                    has_images=has_images,
+                )
+                if feature == "response_format":
+                    retry = dict(request)
+                    retry.pop("response_format", None)
+                    retry["messages"] = _append_instruction(
+                        messages,
+                        _json_instruction(format),
+                    )
+                    response = await self._client.chat.completions.create(**retry)
+                elif feature in {"tools", "vision"}:
+                    raise UnsupportedLLMFeatureError(feature, _error_text(exc)) from exc
+                else:
+                    raise
 
         if not response.choices:
             return {"content": "", "thinking": "", "tool_calls": []}

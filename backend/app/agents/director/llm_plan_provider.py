@@ -32,7 +32,13 @@ class DirectorLLMPlanProvider:
         guides: Iterable[str] = (),
     ) -> str:
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
-        return await self.client.generate(self.model, prompt)
+        result = await self.client.chat_response(
+            self.model,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            options={"enable_thinking": False},
+        )
+        return str(result.get("content") or "")
 
     async def complete_with_images(
         self,

@@ -582,6 +582,16 @@ def _prompt_nonempty(shot: Shot) -> bool:
     return False
 
 
+_XML_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*<function=(?P<name>[\w-]+)>(?P<body>[\s\S]*?)</function>\s*</tool_call>",
+    re.IGNORECASE,
+)
+_XML_PARAM_RE = re.compile(
+    r"<parameter=(?P<key>[\w-]+)>(?P<value>[\s\S]*?)</parameter>",
+    re.IGNORECASE,
+)
+
+
 def _parse_tools_from_llm(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Split natural reply and optional trailing tools JSON."""
     raw = (text or "").strip()
@@ -590,6 +600,23 @@ def _parse_tools_from_llm(text: str) -> tuple[str, list[dict[str, Any]]]:
 
     tools: list[dict[str, Any]] = []
     reply = raw
+
+    # Qwen-style XML tool calls emitted as text instead of native tool_calls.
+    xml_calls = list(_XML_TOOL_CALL_RE.finditer(raw))
+    if xml_calls:
+        for call in xml_calls:
+            args: dict[str, Any] = {}
+            for param in _XML_PARAM_RE.finditer(call.group("body")):
+                value = param.group("value").strip()
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+                args[param.group("key")] = value
+            tools.append({"name": call.group("name"), "args": args})
+        reply = _XML_TOOL_CALL_RE.sub("", raw).strip()
+        if tools:
+            return reply, tools
 
     # Fenced ```json ... ```
     fence = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw, flags=re.I)

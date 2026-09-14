@@ -3931,3 +3931,39 @@ async def test_ollama_chat_response_passes_native_tools_and_json_schema(monkeypa
         "num_ctx": 32_768,
         "num_predict": 4_096,
     }
+
+
+def test_parse_tools_from_llm_reads_xml_tool_calls():
+    """Qwen-style XML tool calls emitted as text must still execute."""
+    shots = [{"shot_id": "sht_1", "title": "The Launch", "duration_s": 8.0}]
+    xml = "\n".join(
+        [
+            "Saving the storyboard now.",
+            "<tool_call>",
+            "<function=save_storyboard>",
+            "<parameter=expected_script_hash>",
+            "68287bb2b8b1627e",
+            "</parameter>",
+            "<parameter=shots>",
+            json.dumps(shots),
+            "</parameter>",
+            "</function>",
+            "</tool_call>",
+        ]
+    )
+
+    reply, tools = _parse_tools_from_llm(xml)
+
+    assert tools == [
+        {
+            "name": "save_storyboard",
+            "args": {"expected_script_hash": "68287bb2b8b1627e", "shots": shots},
+        }
+    ]
+    assert reply == "Saving the storyboard now."
+
+
+def test_parse_tools_from_llm_leaves_plain_prose_alone():
+    text = "Your storyboard has 7 shots. Want me to generate reference frames?"
+
+    assert _parse_tools_from_llm(text) == (text, [])

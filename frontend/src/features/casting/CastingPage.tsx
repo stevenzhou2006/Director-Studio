@@ -38,6 +38,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
   const [wardrobeImg, setWardrobeImg] = useState<LocalImage | null>(null);
   const [includeHeadwear, setIncludeHeadwear] = useState(false);
   const [includeFootwear, setIncludeFootwear] = useState(false);
+  const [species, setSpecies] = useState<"auto" | "human" | "quadruped">("auto");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [job, setJob] = useState<JobRecord | null>(null);
@@ -139,6 +140,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
       if (wardrobeImg) fd.set("wardrobe_image", wardrobeImg.file, wardrobeImg.file.name);
       fd.set("include_headwear", wardrobeImg && includeHeadwear ? "true" : "false");
       fd.set("include_footwear", wardrobeImg && includeFootwear ? "true" : "false");
+      fd.set("species", species);
       setJob(await generateActor(fd));
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
@@ -251,6 +253,20 @@ export function CastingPage({ onOpenLibrary }: Props) {
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Optional notes for the library"
               />
+            </label>
+            <label className="field">
+              <span>Species</span>
+              <select
+                value={species}
+                disabled={isRunning}
+                onChange={(e) =>
+                  setSpecies(e.target.value as "auto" | "human" | "quadruped")
+                }
+              >
+                <option value="auto">Auto (detect from description)</option>
+                <option value="human">Human</option>
+                <option value="quadruped">Quadruped animal (cat, dog…)</option>
+              </select>
             </label>
           </div>
 

@@ -85,8 +85,61 @@ _TV_SHEET_W = 2880
 _TV_SHEET_H = 1920
 _TV_BUST_H = 960
 
-# Master base (ref path). User Description is appended at build time — it controls
-# outfit/footwear when stated (e.g. bare feet vs shoes). Do not hardcode footwear here.
+# --- Species awareness ---
+# "human" keeps the original casting persona. "quadruped" swaps every pose /
+# anatomy clause so an animal reference is not humanized by the base prompts.
+SPECIES_HUMAN = "human"
+SPECIES_QUADRUPED = "quadruped"
+SPECIES_AUTO = "auto"
+
+_QUADRUPED_HINTS = (
+    "cat", "cats", "kitten", "dog", "dogs", "puppy", "fox", "wolf", "tiger",
+    "lion", "leopard", "cheetah", "panther", "puma", "jaguar", "rabbit",
+    "bunny", "ferret", "raccoon", "panda", "bear", "deer", "horse", "pony",
+    "monkey", "ape", "fennec", "tabby", "siamese", "persian", "sphynx",
+    "quadruped", "four-legged", "four legged", "on all fours", "on all four",
+    "paw", "paws", "tail", "animal", "狸花猫", "猫", "狗", "狐狸", "兔子",
+    "熊猫", "老虎", "狮子", "马", "猴", "动物", "四足",
+)
+
+
+def detect_species(text: str) -> str:
+    """Keyword-based species detection from the actor description."""
+    lowered = (text or "").lower()
+    if any(hint in lowered for hint in _QUADRUPED_HINTS):
+        return SPECIES_QUADRUPED
+    return SPECIES_HUMAN
+
+
+def resolve_species(species: str | None, description: str) -> str:
+    if species == SPECIES_QUADRUPED:
+        return SPECIES_QUADRUPED
+    if species == SPECIES_HUMAN:
+        return SPECIES_HUMAN
+    return detect_species(description)
+
+
+# Quadruped master base: same structure as the human one, animal anatomy.
+REF_QUADRUPED_MASTER_PROMPT = (
+    "Image 1 is the animal actor REFERENCE. Preserve the same animal: face identity, "
+    "ear shape, eye color, nose, coat/fur color and pattern, body build, tail, and "
+    "overall look exactly as visible. Normalize into a photorealistic professional "
+    "animal actor casting master: front-facing complete full-body studio portrait, "
+    "camera at the animal's own eye level, natural quadruped stance on all four paws, "
+    "weight even on all legs, tail fully visible and hanging or curled naturally, "
+    "head to tail-tip and paw pads visible with margin, plain seamless white studio "
+    "background, soft even lighting. "
+    "If the reference is a close-up face only, invent a natural quadruped body "
+    "consistent with that face and the written description (do not invent a different "
+    "animal). Do NOT stand the animal upright on two legs; no hands, no thumbs, no "
+    "anthropomorphic posture. "
+    "Outfit and footwear: follow the USER DESCRIPTION below when it specifies "
+    "clothing, harness or bare coat; otherwise keep the animal unclothed with its "
+    "natural coat. Exactly one animal, no text, no collage, no props."
+)
+
+# Human master base (ref path). User Description is appended at build time — it
+# controls outfit/footwear when stated (e.g. bare feet vs shoes).
 REF_ACTOR_MASTER_PROMPT = (
     "Image 1 is the actor REFERENCE photo. Preserve the same person: face identity, "
     "hairstyle, hair color/length, body build as visible, age and overall look. "
@@ -121,17 +174,44 @@ _FULLBODY_THREEVIEW_PROMPT_TEMPLATE = (
     "No text, labels, crop, or clothing changes between panels."
 )
 
+_FULLBODY_THREEVIEW_QUADRUPED_TEMPLATE = (
+    "Image 1 is the animal actor MASTER (full-body front). "
+    "Image 2 is the original animal REFERENCE photo — keep the same animal identity "
+    "(face, ears, coat pattern, body vibe) consistent with image 1 and image 2. "
+    "Create one wide professional animal turnaround sheet: exactly THREE equal panels "
+    "with clean white separators — and ONLY three figures total (one per panel). "
+    "FORBIDDEN: more than three animals, extra clones, a row of extra backs, six-panel grids, "
+    "duplicated bodies, or extra mini-figures between panels. "
+    "Every panel: the same animal in a natural quadruped stance on all four paws, "
+    "tail fully visible, never standing upright on two legs, no hands, no thumbs, "
+    "no anthropomorphic posture. "
+    "Keep the same coat, markings, clothing if any, paws, and tail as the master across all panels. "
+    "{headwear_instruction} "
+    "LEFT: exact front view. CENTER: right-facing side profile. "
+    "RIGHT: exact back view showing the full back coat and tail. "
+    "Same scale, camera at the animal's eye level, light-gray studio background, "
+    "accurate paws and legs. No text, labels, crop, or clothing changes between panels."
+)
 
-def _fullbody_threeview_prompt(*, include_headwear: bool) -> str:
-    headwear_instruction = (
-        "The same hat or headwear visible on the master must appear in all three panels, "
-        "with identical shape, color, trim, and placement"
-        if include_headwear
-        else "No hat or headwear in any panel"
+
+def _fullbody_threeview_prompt(
+    *, include_headwear: bool, species: str = SPECIES_HUMAN
+) -> str:
+    if include_headwear:
+        headwear_instruction = (
+            "The same hat or headwear visible on the master must appear in all three panels, "
+            "with identical shape, color, trim, and placement"
+        )
+    elif species == SPECIES_QUADRUPED:
+        headwear_instruction = "No hat, collar, or headwear in any panel"
+    else:
+        headwear_instruction = "No hat or headwear in any panel"
+    template = (
+        _FULLBODY_THREEVIEW_QUADRUPED_TEMPLATE
+        if species == SPECIES_QUADRUPED
+        else _FULLBODY_THREEVIEW_PROMPT_TEMPLATE
     )
-    return _FULLBODY_THREEVIEW_PROMPT_TEMPLATE.format(
-        headwear_instruction=headwear_instruction
-    )
+    return template.format(headwear_instruction=headwear_instruction)
 
 
 FULLBODY_THREEVIEW_PROMPT = _fullbody_threeview_prompt(include_headwear=False)
@@ -148,7 +228,7 @@ def _strip_dynamic_per_view_nodes(prompt: dict[str, Any]) -> None:
 
 
 def _use_workbench_multipanel_threeview(
-    prompt: dict[str, Any], *, include_headwear: bool
+    prompt: dict[str, Any], *, include_headwear: bool, species: str = SPECIES_HUMAN
 ) -> None:
     """
     Keep qwen_actor_asset_workbench multipanel three-view:
@@ -161,7 +241,9 @@ def _use_workbench_multipanel_threeview(
 
     if NODE_FULLBODY_THREEVIEW_PROMPT in prompt:
         prompt[NODE_FULLBODY_THREEVIEW_PROMPT]["inputs"]["value"] = (
-            _fullbody_threeview_prompt(include_headwear=include_headwear)
+            _fullbody_threeview_prompt(
+                include_headwear=include_headwear, species=species
+            )
         )
     if NODE_BUST_THREEVIEW_PROMPT in prompt:
         prompt[NODE_BUST_THREEVIEW_PROMPT]["inputs"]["value"] = BUST_THREEVIEW_PROMPT
@@ -194,11 +276,13 @@ def _use_workbench_multipanel_threeview(
 
 
 WARDROBE_EXTRACT_PROMPT = (
-    "Extract the complete coordinated outfit from the person in the source image and present it "
+    "Extract the complete coordinated outfit from the subject in the source image and present it "
     "as a clean product-style wardrobe reference on a plain neutral background. Preserve garment "
     "silhouette, construction, layers, material, colors, trim, patterns, closures, and visible wear. "
-    "Exclude the person's face, hair, body, pose, hands, jewelry, handheld objects, and background. "
-    "{headwear} {footwear} Exactly one coordinated wardrobe set, no person, no text, no collage."
+    "Exclude the subject's face, hair or fur, body, pose, hands or paws, jewelry, handheld objects, "
+    "and background. "
+    "{headwear} {footwear} Exactly one coordinated wardrobe set, no person or animal, no text, "
+    "no collage."
 )
 
 
@@ -221,7 +305,10 @@ def _wardrobe_extract_prompt(
 
 
 def _wardrobe_transfer_prompt(
-    *, include_headwear: bool, include_footwear: bool
+    *,
+    include_headwear: bool,
+    include_footwear: bool,
+    species: str = SPECIES_HUMAN,
 ) -> str:
     headwear = (
         "Apply the hat or headwear from image 2, preserving its exact design and fit; keep the actor's "
@@ -236,6 +323,32 @@ def _wardrobe_transfer_prompt(
         else "Preserve image 1's feet and footwear; if the master is barefoot, keep it "
         "barefoot, and if it wears shoes, keep equivalent shoes."
     )
+    if species == SPECIES_QUADRUPED:
+        headwear = (
+            "Apply the hat or headwear from image 2, preserving its exact design and fit over the "
+            "animal's ears and head."
+            if include_headwear
+            else "Preserve the master's head, ears, and coat and do not add headwear or collars."
+        )
+        footwear = (
+            "Apply the exact footwear from image 2 as a matched set on all paws, preserving its "
+            "design, material, and color."
+            if include_footwear
+            else "Preserve image 1's paws bare; do not add shoes."
+        )
+        return (
+            "Image 1 is the target animal actor master — LOCK its face, identity, quadruped "
+            "anatomy, leg length, body proportions, stance on all four paws, tail, and pose. "
+            "Image 2 is a wardrobe reference containing garments and only the explicitly selected "
+            "wearable accessories. Image 3 is the original animal reference; use it for identity "
+            "only, preserving the same facial features, ear shape, and coat pattern. Do not copy "
+            "clothing, pose, framing, or background from image 3. Re-dress image 1 with the "
+            "garments from image 2, tailored to the animal's quadruped body so that all four legs, "
+            "paws, and the tail remain visible and natural; never stand the animal upright. "
+            f"{headwear} {footwear} Ignore the garment source's face, fur, body, and pose. "
+            "Exactly one front-facing complete full-body animal in natural quadruped stance, "
+            "plain white studio background, no text."
+        )
     return (
         "Image 1 is the target actor master — LOCK its face, identity, body proportions, and pose. "
         "Image 2 is a wardrobe reference containing garments and only the explicitly selected "
@@ -276,6 +389,7 @@ def build_actor_prompt(
     wardrobe_image_name: str | None = None,
     include_headwear: bool = False,
     include_footwear: bool = False,
+    species: str = SPECIES_AUTO,
     seed: int | None = None,
     job_id: str | None = None,
 ) -> tuple[dict[str, Any], int]:
@@ -287,21 +401,35 @@ def build_actor_prompt(
     - Single description text (legacy body/hair fields ignored / cleared)
     - Full-body three-view: workbench multipanel once
     - Bust three-view: crop of that sheet
+    - species: "human" / "quadruped" / "auto" (detect from description)
     """
     prompt = copy.deepcopy(load_base_prompt())
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
     # Single description — also injected into ref-path master (node 63), not only text path 58
     desc = (description or "").strip() or DEFAULT_DESCRIPTION
+    resolved_species = resolve_species(species, desc)
     prompt[NODE_DESCRIPTION]["inputs"]["value"] = desc
     prompt[NODE_BODY]["inputs"]["value"] = ""
     prompt[NODE_HAIR]["inputs"]["value"] = ""
-    prompt[NODE_NEGATIVE]["inputs"]["text"] = negative_prompt or DEFAULT_NEGATIVE
+
+    negative = negative_prompt or DEFAULT_NEGATIVE
+    if resolved_species == SPECIES_QUADRUPED:
+        negative += (
+            ", anthropomorphic, humanoid figure, standing upright on two legs, "
+            "human hands, thumbs, human face, bipedal posture"
+        )
+    prompt[NODE_NEGATIVE]["inputs"]["text"] = negative
 
     # Master base + user description (outfit/footwear follow description when stated)
     if NODE_REF_BASE_PROMPT in prompt:
+        base = (
+            REF_QUADRUPED_MASTER_PROMPT
+            if resolved_species == SPECIES_QUADRUPED
+            else REF_ACTOR_MASTER_PROMPT
+        )
         prompt[NODE_REF_BASE_PROMPT]["inputs"]["value"] = (
-            f"{REF_ACTOR_MASTER_PROMPT}\n\nUSER DESCRIPTION:\n{desc}"
+            f"{base}\n\nUSER DESCRIPTION:\n{desc}"
         )
 
     # Neutral concat delimiters (body/hair nodes empty; description already in 63)
@@ -313,6 +441,7 @@ def build_actor_prompt(
         prompt["24"]["inputs"]["prompt"] = _wardrobe_transfer_prompt(
             include_headwear=include_headwear,
             include_footwear=include_footwear,
+            species=resolved_species,
         )
         prompt["24"]["inputs"]["image3"] = [NODE_ACTOR_IMAGE, 0]
     if NODE_WARDROBE_EXTRACT_PROMPT in prompt:
@@ -332,7 +461,7 @@ def build_actor_prompt(
         prompt["16"]["inputs"]["image1"] = [NODE_ACTOR_IMAGE, 0]
 
     _use_workbench_multipanel_threeview(
-        prompt, include_headwear=include_headwear
+        prompt, include_headwear=include_headwear, species=resolved_species
     )
 
     for nid in SEED_NODES:

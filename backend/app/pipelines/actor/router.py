@@ -72,6 +72,7 @@ async def generate_actor(
     project_id: str = Form(""),
     include_headwear: bool = Form(False),
     include_footwear: bool = Form(False),
+    species: str = Form("auto"),
     actor_image: UploadFile | None = File(None),
     wardrobe_image: UploadFile | None = File(None),
 ) -> ActorJobResponse:
@@ -122,6 +123,7 @@ async def generate_actor(
             "has_wardrobe_ref": has_wardrobe,
             "include_headwear": include_headwear,
             "include_footwear": include_footwear,
+            "species": species if species in ("auto", "human", "quadruped") else "auto",
             "mode": mode,  # display only
         },
         seed=seed_val,

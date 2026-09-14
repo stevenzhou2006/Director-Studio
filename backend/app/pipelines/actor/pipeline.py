@@ -98,6 +98,7 @@ class ActorPipeline(Pipeline):
             wardrobe_image_name=uploaded_images.get("wardrobe"),
             include_headwear=bool(p.get("include_headwear")),
             include_footwear=bool(p.get("include_footwear")),
+            species=p.get("species") or workflow.SPECIES_AUTO,
             seed=job.seed,
             job_id=job.id,
         )

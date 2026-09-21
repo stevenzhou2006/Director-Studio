@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
+from ...core.schemas import ComfyImageRef, JobRecord
 from ..base import Pipeline
 from . import workflow
 
@@ -78,6 +78,10 @@ class ActorPipeline(Pipeline):
         )
         return base
 
+    def default_inputs(self) -> dict[str, tuple[str, bytes]]:
+        """Upload a valid 1×1 blank for optional actor/wardrobe LoadImage slots."""
+        return {workflow.BLANK_INPUT_KEY: workflow.blank_placeholder()}
+
     def build_prompt(
         self,
         job: JobRecord,
@@ -96,8 +100,10 @@ class ActorPipeline(Pipeline):
             negative_prompt=p.get("negative_prompt") or "",
             actor_image_name=uploaded_images.get("actor"),
             wardrobe_image_name=uploaded_images.get("wardrobe"),
+            blank_image_name=uploaded_images.get(workflow.BLANK_INPUT_KEY),
             include_headwear=bool(p.get("include_headwear")),
             include_footwear=bool(p.get("include_footwear")),
+            include_wardrobe=bool(p.get("include_wardrobe", True)),
             species=p.get("species") or workflow.SPECIES_AUTO,
             seed=job.seed,
             job_id=job.id,
@@ -109,7 +115,13 @@ class ActorPipeline(Pipeline):
         *,
         job: JobRecord | None = None,
     ) -> dict[str, ComfyImageRef]:
-        return workflow.map_history_outputs(history)
+        mapped = workflow.map_history_outputs(history)
+        if job is not None and not bool(
+            (job.params or {}).get("include_wardrobe", True)
+        ):
+            # No wardrobe requested ⇒ the graph still saves a 1×1 blank; drop it.
+            mapped.pop("wardrobe_ref", None)
+        return mapped
 
     def library_input_keys(self) -> list[str]:
         return ["actor", "wardrobe"]
@@ -118,14 +130,10 @@ class ActorPipeline(Pipeline):
         """No multipanel hair paste — hair is text-driven; bust is already a crop."""
         return None
 
-    def save_to_library(
-        self,
-        job: JobRecord,
-        *,
-        name: str | None = None,
-        notes: str | None = None,
-        project_id: str | None = None,
-    ) -> LibraryAsset:
-        return super().save_to_library(
-            job, name=name, notes=notes, project_id=project_id
-        )
+    def library_meta(self, job: JobRecord) -> dict[str, Any]:
+        species, description = workflow.resolve_actor_identity(job.params or {})
+        return {
+            **(job.params or {}),
+            "species": species,
+            "description": description,
+        }

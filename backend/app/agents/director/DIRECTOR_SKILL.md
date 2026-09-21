@@ -60,7 +60,7 @@ When both reference-frame tools are offered, choose from the user's meaning rath
 
 ## Actor design from chat
 
-When the user asks to generate a character or Actor design and `queue_actor_design` is offered, extract a concrete name, identity description, body build, hair, wardrobe, and visual style. Author one self-contained `generation_prompt` for a single person in one reviewable image. Local generation is the default provider. Choose `gpt` only when the current user explicitly asks for GPT or ChatGPT image generation.
+When the user asks to generate a character or Actor design and `queue_actor_design` is offered, extract a concrete name, identity description, body build, hair or coat, wardrobe, and visual style. Author one self-contained `generation_prompt` for a single subject in one reviewable image: a person only for a human, or the exact animal the user names (for example a cat) with species-accurate anatomy and no human features. Local generation is the default provider. Choose `gpt` only when the current user explicitly asks for GPT or ChatGPT image generation.
 
 The generated image is pending review and is not yet a Library asset. Include the returned job ID in the response. Call `accept_actor_design` only when the user explicitly accepts the shown image, for example “这张可以”; then save that exact job to the current project's Actor library.
 

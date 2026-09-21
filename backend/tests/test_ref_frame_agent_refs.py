@@ -159,3 +159,287 @@ def test_collect_skips_layout_output_role(svc: DirectorService):
     packed = svc._collect_ref_frame_refs(shot)
     assert len(packed["images"]) == 2
     assert all("lay_" not in lab for lab in packed["labels"] if lab.startswith("Image"))
+
+
+def test_collect_packs_two_actors_and_keeps_the_prop_attached(monkeypatch) -> None:
+    import io
+
+    from PIL import Image
+
+    def png(width: int, height: int, color: tuple[int, int, int]) -> bytes:
+        buf = io.BytesIO()
+        Image.new("RGB", (width, height), color).save(buf, format="PNG")
+        return buf.getvalue()
+
+    svc = DirectorService(plan_provider=_NoopProvider())
+    assets = {
+        "act_a": LibraryAsset(
+            id="act_a", kind="actors", name="Dali",
+            files={"fullbody_threeview": "x.png"}, pipeline_id="actor",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+            meta={"species": "quadruped", "description": ""},
+        ),
+        "act_b": LibraryAsset(
+            id="act_b", kind="actors", name="xiaobai",
+            files={"fullbody_threeview": "x.png"}, pipeline_id="actor",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+            meta={"species": "quadruped", "description": ""},
+        ),
+        "scn_s": LibraryAsset(
+            id="scn_s", kind="scenes", name="garage",
+            files={"master": "x.png"}, pipeline_id="test",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+        ),
+        "prp_p": LibraryAsset(
+            id="prp_p", kind="props", name="psu",
+            files={"master": "x.png"}, pipeline_id="external",
+            job_id="", created_at="2026-01-01T00:00:00+00:00",
+        ),
+    }
+
+    def fake_load(kind: str, asset_id: str):
+        a = assets.get(asset_id)
+        return a if a and a.kind == kind else None
+
+    monkeypatch.setattr("app.agents.director.service.load_asset", fake_load)
+    monkeypatch.setattr(
+        "app.agents.director.service._actor_image_for_ref_frame",
+        lambda asset, preferred_key=None: (
+            "actor.png", png(200, 400, (200, 120, 60)), "fullbody_threeview->front_crop",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.agents.director.service._scene_image_for_ref_frame",
+        lambda asset, preferred_key=None: ("scene.png", png(800, 450, (60, 60, 60)), "master"),
+    )
+    monkeypatch.setattr(
+        "app.agents.director.service._read_asset_image_bytes",
+        lambda asset, role=None, file_key=None: ("prop.png", png(400, 400, (120, 120, 120))),
+    )
+
+    shot = Shot(
+        id="sht_prop",
+        project_id="prj_t",
+        scene_id="sc01",
+        title="psu",
+        script_beat="two cats beside a psu",
+        duration_s=15.0,
+        status=ShotStatus.ref_frame_pending,
+        refs=[
+            ShotRef(role=RefRole.actor, asset_id="act_a", picture_index=1, file_key="master"),
+            ShotRef(role=RefRole.actor, asset_id="act_b", picture_index=2, file_key="master"),
+            ShotRef(role=RefRole.prop, asset_id="prp_p", picture_index=3, file_key="master"),
+            ShotRef(role=RefRole.scene, asset_id="scn_s", picture_index=4, file_key="master"),
+        ],
+        prompt_sections=PromptSections(),
+    )
+
+    packed = svc._collect_ref_frame_refs(shot)
+
+    assert list(packed["images"].keys()) == ["ref_0", "ref_1", "ref_2"]
+    labels = packed["labels"]
+    assert any(
+        "CHARACTERS x2" in label and "Dali" in label and "xiaobai" in label
+        for label in labels
+    )
+    assert any("PROP" in label and "psu" in label for label in labels)
+    by_asset = {ref.asset_id: ref for ref in packed["source_refs"]}
+    assert by_asset["act_a"].image_index == 2
+    assert by_asset["act_b"].image_index == 2
+    assert by_asset["scn_s"].image_index == 1
+    assert by_asset["prp_p"].image_index == 3
+
+
+def test_collect_keeps_two_human_actors_separate(monkeypatch) -> None:
+    import io
+
+    from PIL import Image
+
+    def png(width: int, height: int, color: tuple[int, int, int]) -> bytes:
+        buf = io.BytesIO()
+        Image.new("RGB", (width, height), color).save(buf, format="PNG")
+        return buf.getvalue()
+
+    svc = DirectorService(plan_provider=_NoopProvider())
+    assets = {
+        "act_a": LibraryAsset(
+            id="act_a", kind="actors", name="Mia",
+            files={"fullbody_threeview": "x.png"}, pipeline_id="actor",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+            meta={"species": "human", "description": "Mia, a woman"},
+        ),
+        "act_b": LibraryAsset(
+            id="act_b", kind="actors", name="Kai",
+            files={"fullbody_threeview": "x.png"}, pipeline_id="actor",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+            meta={"species": "human", "description": "Kai, a man"},
+        ),
+        "scn_s": LibraryAsset(
+            id="scn_s", kind="scenes", name="garage",
+            files={"master": "x.png"}, pipeline_id="test",
+            job_id="j", created_at="2026-01-01T00:00:00+00:00",
+        ),
+        "prp_p": LibraryAsset(
+            id="prp_p", kind="props", name="psu",
+            files={"master": "x.png"}, pipeline_id="external",
+            job_id="", created_at="2026-01-01T00:00:00+00:00",
+        ),
+    }
+
+    def fake_load(kind: str, asset_id: str):
+        a = assets.get(asset_id)
+        return a if a and a.kind == kind else None
+
+    monkeypatch.setattr("app.agents.director.service.load_asset", fake_load)
+    monkeypatch.setattr(
+        "app.agents.director.service._actor_image_for_ref_frame",
+        lambda asset, preferred_key=None: (
+            "actor.png", png(200, 400, (200, 120, 60)), "fullbody_threeview->front_crop",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.agents.director.service._scene_image_for_ref_frame",
+        lambda asset, preferred_key=None: ("scene.png", png(800, 450, (60, 60, 60)), "master"),
+    )
+    monkeypatch.setattr(
+        "app.agents.director.service._read_asset_image_bytes",
+        lambda asset, role=None, file_key=None: ("prop.png", png(400, 400, (120, 120, 120))),
+    )
+
+    shot = Shot(
+        id="sht_humans",
+        project_id="prj_t",
+        scene_id="sc01",
+        title="psu",
+        script_beat="two people beside a psu",
+        duration_s=15.0,
+        status=ShotStatus.ref_frame_pending,
+        refs=[
+            ShotRef(role=RefRole.actor, asset_id="act_a", picture_index=1, file_key="master"),
+            ShotRef(role=RefRole.actor, asset_id="act_b", picture_index=2, file_key="master"),
+            ShotRef(role=RefRole.prop, asset_id="prp_p", picture_index=3, file_key="master"),
+            ShotRef(role=RefRole.scene, asset_id="scn_s", picture_index=4, file_key="master"),
+        ],
+        prompt_sections=PromptSections(),
+    )
+
+    packed = svc._collect_ref_frame_refs(shot)
+
+    # Human casts keep the original one-image-per-actor packing: the prop is
+    # still text-only and no actor composite is produced.
+    assert list(packed["images"].keys()) == ["ref_0", "ref_1", "ref_2"]
+    assert not any("CHARACTERS x2" in label for label in packed["labels"])
+    assert any("PROP text only" in label for label in packed["labels"])
+    assert all(ref.role != RefRole.prop for ref in packed["source_refs"])
+    assert [ref.image_index for ref in packed["source_refs"]] == [None, None, None]
+
+
+def test_actor_image_prefers_quadruped_threeview_over_master(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agents.director import reference_service as rs
+
+    cat = LibraryAsset(
+        id="act_cat",
+        kind="actors",
+        name="Dali",
+        files={"master": "master.png", "fullbody_threeview": "fullbody_threeview.png"},
+        pipeline_id="actor",
+        job_id="job_cat",
+        created_at="2026-01-01T00:00:00+00:00",
+        meta={"species": "quadruped", "description": ""},
+    )
+    requested: list[str] = []
+
+    def fake_resolve(asset, *, role=None, file_key=None):
+        requested.append(file_key)
+        if file_key in {"master", "fullbody_threeview"}:
+            return (f"{file_key}.png", b"data", file_key)
+        return None
+
+    monkeypatch.setattr(
+        "app.core.library.images.resolve_asset_image", fake_resolve
+    )
+    monkeypatch.setattr(
+        rs,
+        "_crop_sheet_front_panel",
+        lambda data, force=False: ("crop.png", b"crop"),
+    )
+
+    name, data, used = rs._actor_image_for_ref_frame(cat, preferred_key="master")
+
+    assert used == "fullbody_threeview->front_crop"
+    assert "master" not in requested
+
+
+def test_collect_describes_quadruped_actor_as_an_animal(
+    svc: DirectorService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.pipelines.actor.workflow import DEFAULT_DESCRIPTION
+
+    cat = LibraryAsset(
+        id="act_cat",
+        kind="actors",
+        name="Dali",
+        files={"fullbody_threeview": "fullbody_threeview.png"},
+        pipeline_id="actor",
+        job_id="job_cat",
+        created_at="2026-01-01T00:00:00+00:00",
+        meta={"species": "quadruped", "description": DEFAULT_DESCRIPTION},
+    )
+    scene = LibraryAsset(
+        id="scn_garage",
+        kind="scenes",
+        name="garage",
+        files={"master": "master.png"},
+        pipeline_id="test",
+        job_id="job_scene",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    assets = {"act_cat": cat, "scn_garage": scene}
+
+    def fake_load(kind: str, asset_id: str):
+        a = assets.get(asset_id)
+        return a if a and a.kind == kind else None
+
+    monkeypatch.setattr("app.agents.director.service.load_asset", fake_load)
+
+    shot = Shot(
+        id="sht_cats",
+        project_id="prj_t",
+        scene_id="sc01",
+        title="psu",
+        script_beat="two cats beside a psu",
+        duration_s=15.0,
+        status=ShotStatus.ref_frame_pending,
+        refs=[
+            ShotRef(
+                role=RefRole.scene,
+                asset_id="scn_garage",
+                picture_index=1,
+                file_key="master",
+            ),
+            ShotRef(
+                role=RefRole.actor,
+                asset_id="act_cat",
+                picture_index=2,
+                file_key="fullbody_threeview",
+            ),
+        ],
+        prompt_sections=PromptSections(),
+    )
+
+    packed = svc._collect_ref_frame_refs(shot)
+    character_label = next(
+        label
+        for label in packed["labels"]
+        if label.startswith("Image") and "CHARACTER" in label
+    )
+    lowered = character_label.lower()
+    assert "animal" in lowered
+    assert "all fours" in lowered
+    assert "no human" in lowered
+    # The generic human casting boilerplate must not leak in.
+    assert "body person" not in lowered
+    assert "one adult" not in lowered
+    assert "exactly one person" not in lowered

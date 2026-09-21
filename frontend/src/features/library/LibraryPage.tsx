@@ -32,7 +32,7 @@ export function LibraryPage({
   mobile?: boolean;
   importOwnedByParent?: boolean;
 } = {}) {
-  const { projectId, project } = useProject();
+  const { projectId, project, libraryRevision } = useProject();
   const [kind, setKind] = useState<LibraryKind>(lockedKind ?? "actors");
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +59,7 @@ export function LibraryPage({
     listLibraryAssets(kind, projectId)
       .then(setAssets)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [projectId, kind]);
+  }, [projectId, kind, libraryRevision]);
 
   useEffect(() => {
     refresh();

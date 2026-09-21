@@ -36,6 +36,8 @@ vi.mock("../../shared/project/ProjectContext", () => ({
     project: projectState.project,
     refreshProjects: vi.fn(),
     createAndSelect: vi.fn(),
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
   }),
 }));
 
@@ -497,6 +499,39 @@ describe("Director shot actions", () => {
     expect(getDirectorVramStatus).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps Director chat enabled during Comfy generation with a remote LLM", async () => {
+    vi.mocked(getDirectorVramStatus).mockResolvedValue({
+      chat_locked: true,
+      generation_count: 1,
+      generation_jobs: [
+        {
+          job_id: "job_video",
+          pipeline_id: "h3_ref2va",
+          kind: "video",
+          status: "running",
+          phase: "generating",
+          queued_at: "2026-08-31T10:00:00Z",
+        },
+      ],
+      llm_runtime: { provider: "openai-compatible", uses_local_gpu: false },
+    });
+
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+
+    expect(await screen.findByText(/Generating video/)).toBeTruthy();
+    expect(
+      (screen.getByPlaceholderText(/Talk to the Director/) as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Write H3 prompt · Shot 01" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), {
+      target: { value: "Write the prompt" },
+    });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("restores draft and image after a generation race", async () => {
     vi.mocked(chatWithDirectorStream).mockRejectedValueOnce(
       new DirectorChatError("GPU busy", "GPU_GENERATION_ACTIVE", 1),
@@ -544,13 +579,43 @@ describe("Director shot actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("qwen3.6:27b ready on GPU")).toBeTruthy();
-    expect(screen.getByText("Runtime")).toBeTruthy();
     expect(screen.getByText("Executing storyboard tool")).toBeTruthy();
-    expect(screen.getByText("Process")).toBeTruthy();
+    expect(screen.getByText("Steps (1)")).toBeTruthy();
 
     action.resolve({
       reply: "Planned", actions: [], project: projectState.project!, shots: [testShot],
       images: [], thinking: "", steps: ["Executing storyboard tool"],
+    });
+  });
+
+  it("streams reasoning and tokens into the live assistant bubble", async () => {
+    const action = deferred<Awaited<ReturnType<typeof chatWithDirectorStream>>>();
+    vi.mocked(chatWithDirectorStream).mockImplementationOnce((_projectId, _message, _history, handlers) => {
+      handlers?.onThink?.("weighing the options");
+      handlers?.onToken?.("Hello ");
+      handlers?.onToken?.("world");
+      return action.promise;
+    });
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), {
+      target: { value: "Hi" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Thinking…")).toBeTruthy();
+    const streamed = await screen.findByText("Hello world");
+    expect(streamed.className).toContain("streaming");
+
+    action.resolve({
+      reply: "Hello world",
+      actions: [],
+      project: projectState.project!,
+      shots: [testShot],
+      images: [],
+      thinking: "weighing the options",
+      steps: [],
     });
   });
 

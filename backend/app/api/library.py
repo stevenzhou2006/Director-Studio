@@ -209,6 +209,77 @@ def _invalidate_shots_using_asset(asset: LibraryAsset) -> None:
             save_shot(shot.model_copy(update={"meta": meta}))
 
 
+def _detach_asset_from_shots(kind: str, asset_id: str, asset_name: str) -> list[str]:
+    """Remove every binding to a deleted asset so no Shot keeps a dangling ref.
+
+    Deleting a Library asset used to leave Shots pointing at the removed id,
+    which rendered as an empty Picture with no preview. Every Picture, voice,
+    and Layout binding is removed, remaining Pictures are renumbered, and the
+    Shot is flagged for material review. Returns the updated Shot ids.
+    """
+    from ..core.projects.layouts import sync_selected_layout_refs
+
+    removal = {"kind": kind, "asset_id": asset_id, "name": asset_name}
+    updated: list[str] = []
+    for project in list_projects():
+        for shot in list_shots(project.id):
+            refs = [ref for ref in shot.refs if ref.asset_id != asset_id]
+            voice_refs = [
+                ref for ref in shot.voice_refs if ref.asset_id != asset_id
+            ]
+            layout_refs = [
+                ref for ref in shot.layout_refs if ref.asset_id != asset_id
+            ]
+            removed_pictures = len(shot.refs) - len(refs)
+            removed_voices = len(shot.voice_refs) - len(voice_refs)
+            removed_layouts = len(shot.layout_refs) - len(layout_refs)
+            if not (removed_pictures or removed_voices or removed_layouts):
+                continue
+
+            refs = [
+                ref.model_copy(update={"picture_index": index})
+                for index, ref in enumerate(
+                    sorted(refs, key=lambda item: item.picture_index),
+                    start=1,
+                )
+            ]
+            updates: dict = {
+                "refs": refs,
+                "voice_refs": voice_refs,
+                "layout_refs": layout_refs,
+            }
+            if shot.layout_asset_id == asset_id:
+                updates.update(
+                    {
+                        "layout_asset_id": None,
+                        "layout_review_status": None,
+                        "ref_frame_job_id": None,
+                    }
+                )
+
+            meta = dict(shot.meta or {})
+            if removed_pictures or removed_layouts:
+                meta["prompt_picture_signature"] = ""
+                meta["prompt_layout_signature"] = ""
+            if removed_voices:
+                meta["prompt_voice_signature"] = ""
+            changes = dict(meta.get("material_changes") or {})
+            changes["removed"] = [
+                *(changes.get("removed") or []),
+                removal,
+            ]
+            meta["material_changes"] = changes
+            meta["material_review_pending"] = True
+            updates["meta"] = meta
+
+            working = shot.model_copy(update=updates)
+            if layout_refs:
+                working = sync_selected_layout_refs(working)
+            save_shot(working)
+            updated.append(shot.id)
+    return updated
+
+
 @router.patch("/library/{kind}/{asset_id}", response_model=LibraryAsset)
 async def update_library_asset_metadata(
     kind: str,
@@ -244,8 +315,13 @@ async def delete_library_asset(kind: str, asset_id: str) -> dict:
     """Delete a library asset and all of its files (same-group outputs)."""
     if kind not in KINDS:
         raise HTTPException(400, f"unknown kind: {kind}")
+    asset = load_asset(kind, asset_id)
+    if asset is None:
+        raise HTTPException(404, f"asset not found: {kind}/{asset_id}")
+    # Detach first: a deleted asset must not leave dangling Shot bindings.
+    detached = _detach_asset_from_shots(kind, asset_id, asset.name)
     try:
         delete_asset(kind, asset_id)
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
-    return {"ok": True, "kind": kind, "id": asset_id}
+    return {"ok": True, "kind": kind, "id": asset_id, "detached_shots": detached}

@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Shot } from "../../shared/api/types";
 import { LayoutReferenceList } from "./LayoutReferenceList";
+import { removeLayoutReference } from "./api";
 
 vi.mock("./api", () => ({
   queueLayout: vi.fn(),
   reviewLayout: vi.fn(),
   selectLayout: vi.fn(),
+  removeLayoutReference: vi.fn(),
 }));
 
 const baseShot: Shot = {
@@ -83,6 +85,7 @@ const baseShot: Shot = {
 function renderList(
   shot: Shot,
   onDiscussAddReference = vi.fn(),
+  onShotUpdated = vi.fn(),
 ) {
   return render(
     <LayoutReferenceList
@@ -90,6 +93,7 @@ function renderList(
       busy={false}
       onDiscussAddReference={onDiscussAddReference}
       onOpenImage={vi.fn()}
+      onShotUpdated={onShotUpdated}
     />,
   );
 }
@@ -258,6 +262,38 @@ describe("LayoutReferenceList", () => {
     expect(screen.queryByLabelText("Purpose")).toBeNull();
     expect(screen.queryByLabelText("Time hint")).toBeNull();
     expect(screen.queryByRole("button", { name: "Queue reference frame" })).toBeNull();
+  });
+
+  it("removes an unwanted reference frame and propagates the updated shot", async () => {
+    const updated: Shot = { ...baseShot, layout_refs: [baseShot.layout_refs![1]] };
+    vi.mocked(removeLayoutReference).mockResolvedValueOnce(updated);
+    const onShotUpdated = vi.fn();
+    renderList(baseShot, vi.fn(), onShotUpdated);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove before entry" }));
+
+    expect(vi.mocked(removeLayoutReference)).toHaveBeenCalledWith("sht_layouts", "lr_before");
+    await waitFor(() => expect(onShotUpdated).toHaveBeenCalledWith(updated));
+  });
+
+  it("blocks removal while a reference frame job is still running", () => {
+    renderList({
+      ...baseShot,
+      layout_refs: [
+        {
+          ...baseShot.layout_refs![0],
+          asset_id: null,
+          job_status: "running",
+          review_status: null,
+          selected_for_h3: false,
+        },
+      ],
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "Remove before entry" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("shows a tail-frame origin label when origin.kind is clip_tail_frame", () => {

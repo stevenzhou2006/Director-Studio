@@ -38,6 +38,7 @@ class ActorJobResponse(BaseModel):
     has_wardrobe_ref: bool = False
     include_headwear: bool = False
     include_footwear: bool = False
+    include_wardrobe: bool = True
     species: str = "auto"
     seed: int | None = None
     fixed_seed: bool = False
@@ -82,6 +83,7 @@ class ActorJobResponse(BaseModel):
             has_wardrobe_ref=has_wardrobe,
             include_headwear=bool(p.get("include_headwear")),
             include_footwear=bool(p.get("include_footwear")),
+            include_wardrobe=bool(p.get("include_wardrobe", True)),
             species=p.get("species") or "auto",
             seed=job.seed,
             fixed_seed=job.fixed_seed,
@@ -130,6 +132,7 @@ class ActorRecord(BaseModel):
     has_wardrobe_ref: bool = False
     include_headwear: bool = False
     include_footwear: bool = False
+    include_wardrobe: bool = True
     species: str = "auto"
     seed: int | None = None
     job_id: str
@@ -180,6 +183,7 @@ class ActorRecord(BaseModel):
             has_wardrobe_ref=has_wardrobe,
             include_headwear=bool(meta.get("include_headwear")),
             include_footwear=bool(meta.get("include_footwear")),
+            include_wardrobe=bool(meta.get("include_wardrobe", True)),
             species=meta.get("species") or "auto",
             seed=asset.seed,
             job_id=asset.job_id,

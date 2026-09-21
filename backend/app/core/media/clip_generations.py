@@ -141,7 +141,9 @@ def _resolve_version_number(
     return index, generations[index - 1]
 
 
-def _resolve_latest(generations: list[JobRecord]) -> tuple[int, JobRecord]:
+def _latest_succeeded_with_output(
+    generations: list[JobRecord],
+) -> tuple[int, JobRecord] | None:
     latest_index: int | None = None
     latest_job: JobRecord | None = None
     for index, job in enumerate(generations, start=1):
@@ -153,11 +155,50 @@ def _resolve_latest(generations: list[JobRecord]) -> tuple[int, JobRecord]:
             continue
         latest_index = index
         latest_job = job
-
     if latest_job is None or latest_index is None:
+        return None
+    return latest_index, latest_job
+
+
+def resolve_latest_succeeded_clip(
+    *,
+    project_id: str,
+    source_shot_id: str,
+    output_kind: Literal["enhanced", "raw"] | None = None,
+) -> ResolvedClip:
+    """Resolve the newest succeeded H3 clip, tolerating newer non-succeeded jobs.
+
+    Unlike ``resolve_source_clip(source_version="latest")`` this never raises
+    ``ClipGenerationAmbiguous``; it is meant for post-production assembly where
+    an unfinished regeneration should not block concatenating the best clip.
+    """
+    generations = list_shot_h3_generations(project_id, source_shot_id)
+    if not generations:
+        raise ClipGenerationError(
+            f"no H3 generations found for shot {source_shot_id} in project {project_id}"
+        )
+    selected = _latest_succeeded_with_output(generations)
+    if selected is None:
+        raise ClipGenerationError(
+            f"shot {source_shot_id} has no succeeded H3 generation with a usable "
+            "video output"
+        )
+    index, job = selected
+    return _resolve_output(
+        job,
+        source_shot_id=source_shot_id,
+        source_generation=index,
+        output_kind=output_kind,
+    )
+
+
+def _resolve_latest(generations: list[JobRecord]) -> tuple[int, JobRecord]:
+    selected = _latest_succeeded_with_output(generations)
+    if selected is None:
         raise ClipGenerationError(
             "no succeeded H3 generation with a usable video output"
         )
+    latest_index, latest_job = selected
 
     for job in generations[latest_index:]:
         if job.status in _AMBIGUOUS_STATUSES:

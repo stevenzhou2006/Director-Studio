@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useProject } from "../../shared/project/ProjectContext";
 import { importExternalAsset, type LibraryKind } from "./api";
 
 const KIND_LABELS: Record<LibraryKind, string> = {
@@ -25,6 +26,7 @@ export function AssetImportDialog({
   onClose: () => void;
   onImported: () => void;
 }) {
+  const { notifyLibraryChanged } = useProject();
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -49,6 +51,7 @@ export function AssetImportDialog({
         notes: notes.trim() || undefined,
         projectId,
       });
+      notifyLibraryChanged();
       onImported();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

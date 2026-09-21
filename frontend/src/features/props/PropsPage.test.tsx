@@ -10,6 +10,8 @@ vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({
     projectId: "prj_test",
     project: { id: "prj_test", name: "Test project" },
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
   }),
 }));
 

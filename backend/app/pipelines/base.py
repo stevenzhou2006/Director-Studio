@@ -31,6 +31,10 @@ class _PipelineCommon:
             ],
         }
 
+    def library_meta(self, job: JobRecord) -> dict[str, Any]:
+        """Meta persisted on the library asset; pipelines may resolve defaults."""
+        return dict(job.params)
+
     def save_to_library(
         self,
         job: JobRecord,
@@ -47,7 +51,7 @@ class _PipelineCommon:
             notes=notes,
             file_keys=list(self.output_labels.keys()) or None,
             input_keys=self.library_input_keys(),
-            meta=dict(job.params),
+            meta=self.library_meta(job),
             project_id=project_id,
         )
 
@@ -62,6 +66,15 @@ class _PipelineCommon:
     def prepare_job_submission(self, job: JobRecord) -> None:
         """Optional synchronous preparation before a job enters the queue."""
         return None
+
+    def default_inputs(self) -> dict[str, tuple[str, bytes]]:
+        """Bundled input files uploaded for every job of this pipeline.
+
+        Keyed like caller-supplied inputs so a workflow can address optional
+        image slots without depending on placeholder files existing inside the
+        ComfyUI input directory.
+        """
+        return {}
 
 
 class Pipeline(_PipelineCommon, ABC):

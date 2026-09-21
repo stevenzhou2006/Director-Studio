@@ -6,7 +6,12 @@ import { VoicePage } from "./VoicePage";
 import { importExternalAsset, listLibraryAssets } from "../library/api";
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ projectId: "prj_test", project: { name: "Voice film" } }),
+  useProject: () => ({
+    projectId: "prj_test",
+    project: { name: "Voice film" },
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
+  }),
 }));
 
 vi.mock("../library/api", () => ({

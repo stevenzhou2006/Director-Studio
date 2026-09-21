@@ -6,9 +6,14 @@ import { LibraryOverview } from "./LibraryOverview";
 import { deleteLibraryAsset, listLibraryAssets } from "../library/api";
 
 const updateLibraryAssetMock = vi.hoisted(() => vi.fn());
+const projectState = vi.hoisted(() => ({ revision: 0 }));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ projectId: "prj_test" }),
+  useProject: () => ({
+    projectId: "prj_test",
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: projectState.revision,
+  }),
 }));
 
 vi.mock("../library/api", () => ({
@@ -47,6 +52,7 @@ describe("LibraryOverview asset details", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    projectState.revision = 0;
     vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
       kind === "actors" ? [actor] : [],
     );
@@ -75,6 +81,16 @@ describe("LibraryOverview asset details", () => {
       expect(screen.queryByRole("dialog", { name: "Mara assets" })).toBeNull();
     });
     expect(vi.mocked(listLibraryAssets).mock.calls.filter(([kind]) => kind === "actors")).toHaveLength(2);
+  });
+
+  it("refetches every group when the library revision changes", async () => {
+    const { rerender } = render(<LibraryOverview onSelectKind={vi.fn()} />);
+    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalledTimes(4));
+
+    projectState.revision += 1;
+    rerender(<LibraryOverview onSelectKind={vi.fn()} />);
+
+    await waitFor(() => expect(listLibraryAssets).toHaveBeenCalledTimes(8));
   });
 
   it("edits asset metadata from the mobile overview detail", async () => {

@@ -170,8 +170,9 @@ async def test_gpt_actor_sources_add_identity_and_wardrobe_authority(
     assert "Image2 is the authoritative character reference for Lu" in prompt
     assert "Image3 is the authoritative character reference for Chen" in prompt
     assert "preserve the same exact person" in prompt
-    assert "Preserve the approved wardrobe shown in Image2" in prompt
-    assert "Preserve the approved wardrobe shown in Image3" in prompt
+    assert "Image2 is the sole authority for Lu's wardrobe" in prompt
+    assert "Image3 is the sole authority for Chen's wardrobe" in prompt
+    assert "the reference image wins" in prompt
     assert prompt.endswith(_brief(refs).generation_prompt)
 
 

@@ -156,14 +156,20 @@ def validate_h3_prompt(
         if not body:
             raise ValueError(f"section {key!r} is empty")
 
-    # Each dialogue line appears exactly once
+    # Each dialogue line appears once per occurrence in the dialogue list. Two
+    # characters can legitimately share the same line (for example a chorus of
+    # "hahaha"), so a duplicated line must appear twice in the prompt package.
+    dialogue_counts: dict[str, int] = {}
     for line in dialogue:
         if not line:
             raise ValueError("dialogue line is empty")
+        dialogue_counts[line] = dialogue_counts.get(line, 0) + 1
+    for line, expected in dialogue_counts.items():
         count = prompt.count(line)
-        if count != 1:
+        if count != expected:
+            expected_text = "exactly once" if expected == 1 else f"exactly {expected} times"
             raise ValueError(
-                f"dialogue line must appear exactly once (found {count}): {line!r}"
+                f"dialogue line must appear {expected_text} (found {count}): {line!r}"
             )
 
     found_audio_indexes = [int(value) for value in re.findall(r"<Audio\s+(\d+)>", prompt)]

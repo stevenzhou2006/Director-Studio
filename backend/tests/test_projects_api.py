@@ -956,6 +956,53 @@ def test_delete_layout_preserves_asset_referenced_by_another_project(client, api
     assert (api_env["library"] / "layouts" / shared.id).exists()
 
 
+def test_delete_library_actor_detaches_shot_binding(client, api_env):
+    project = create_project("Detach actor", "The cat flies.")
+    actor = _seed_actor(api_env["library"], "act_detach_me")
+    scene = _seed_image_reference(
+        api_env["library"],
+        kind="scenes",
+        asset_id="scn_keep_me",
+        file_key="master",
+    )
+    shot = Shot(
+        id="sht_detach_actor",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Fly",
+        script_beat="The cat flies.",
+        duration_s=6,
+        refs=[
+            ShotRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                picture_index=1,
+                file_key="master",
+            ),
+            ShotRef(
+                role=RefRole.scene,
+                asset_id=scene.id,
+                picture_index=2,
+                file_key="master",
+            ),
+        ],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    response = client.delete(f"/api/library/actors/{actor.id}")
+
+    assert response.status_code == 200
+    assert response.json()["detached_shots"] == [shot.id]
+    stored = load_shot(project.id, shot.id)
+    assert [
+        (ref.role.value, ref.asset_id, ref.picture_index) for ref in stored.refs
+    ] == [("scene", scene.id, 1)]
+    assert stored.meta["material_review_pending"] is True
+    assert stored.meta["material_changes"]["removed"][0]["asset_id"] == actor.id
+    assert not (api_env["library"] / "actors" / actor.id).exists()
+
+
 def test_director_chat_history_is_persisted_and_reloaded(client, monkeypatch):
     created = client.post(
         "/api/projects",

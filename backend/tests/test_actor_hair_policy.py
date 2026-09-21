@@ -115,3 +115,155 @@ def test_build_can_extract_and_apply_headwear_and_footwear():
 def test_derive_mode_reference():
     assert w.derive_mode(has_actor_ref=True, has_wardrobe_ref=False) == "reference"
     assert w.derive_mode(has_actor_ref=False, has_wardrobe_ref=False) == "text"
+
+
+def test_build_uses_uploaded_blank_for_missing_references():
+    graph, _ = w.build_actor_prompt(
+        description="fairy with long hair",
+        blank_image_name="ds_job_actor_blank.png",
+    )
+
+    assert graph["15"]["inputs"]["image"] == "ds_job_actor_blank.png"
+    assert graph["23"]["inputs"]["image"] == "ds_job_actor_blank.png"
+
+
+def test_quadruped_species_drives_the_text_path_master():
+    graph, _ = w.build_actor_prompt(
+        description="Dali, a ginger tabby cat with stripes",
+        species=w.SPECIES_QUADRUPED,
+    )
+
+    # Text path master (58 → 62 → 10) must carry the animal anatomy block.
+    assert graph["58"]["inputs"]["value"].startswith(w.TEXT_QUADRUPED_MASTER_PROMPT)
+    assert "Dali, a ginger tabby cat with stripes" in graph["58"]["inputs"]["value"]
+    assert "no anthropomorphic posture" in graph["58"]["inputs"]["value"]
+    # Three-view and negatives stay quadruped-aware.
+    assert "animal actor MASTER" in graph["66"]["inputs"]["value"]
+    assert "anthropomorphic" in graph["11"]["inputs"]["text"]
+
+
+def test_quadruped_master_ignores_human_boilerplate_description():
+    graph, _ = w.build_actor_prompt(
+        description=w.DEFAULT_DESCRIPTION,
+        species=w.SPECIES_QUADRUPED,
+    )
+
+    text_value = graph["58"]["inputs"]["value"]
+    assert w.DEFAULT_QUADRUPED_DESCRIPTION in text_value
+    assert "standing upright" not in text_value
+    assert "exactly one person" not in text_value
+
+    ref_value = graph["63"]["inputs"]["value"]
+    assert "standing upright" not in ref_value
+    assert "exactly one person" not in ref_value
+
+
+def test_human_and_auto_species_keep_the_plain_text_description():
+    human, _ = w.build_actor_prompt(description="a woman", species=w.SPECIES_HUMAN)
+    assert human["58"]["inputs"]["value"] == "a woman"
+
+    auto_cat, _ = w.build_actor_prompt(description="a ginger cat", species=w.SPECIES_AUTO)
+    assert auto_cat["58"]["inputs"]["value"].startswith(w.TEXT_QUADRUPED_MASTER_PROMPT)
+
+
+def test_resolve_actor_identity_fills_species_appropriate_default():
+    species, description = w.resolve_actor_identity(
+        {"species": "quadruped", "description": ""}
+    )
+    assert species == w.SPECIES_QUADRUPED
+    assert description == w.DEFAULT_QUADRUPED_DESCRIPTION
+
+    species, description = w.resolve_actor_identity(
+        {"species": "quadruped", "description": w.DEFAULT_DESCRIPTION}
+    )
+    assert species == w.SPECIES_QUADRUPED
+    # The human casting boilerplate must never ride along on a quadruped.
+    assert description == w.DEFAULT_QUADRUPED_DESCRIPTION
+
+
+def test_actor_prompt_identity_drops_human_boilerplate_for_a_quadruped():
+    appearance, species = w.actor_prompt_identity(
+        {"species": "quadruped", "description": w.DEFAULT_DESCRIPTION}
+    )
+    assert species == w.SPECIES_QUADRUPED
+    assert appearance == w.DEFAULT_QUADRUPED_DESCRIPTION
+    assert "person" not in appearance.lower()
+
+    appearance, species = w.actor_prompt_identity(
+        {"species": "human", "description": "Mia, a tall woman with red hair"}
+    )
+    assert species == w.SPECIES_HUMAN
+    assert appearance == "Mia, a tall woman with red hair"
+
+    # Human actors are untouched, including the generic casting boilerplate.
+    appearance, species = w.actor_prompt_identity(
+        {"species": "human", "description": w.DEFAULT_DESCRIPTION}
+    )
+    assert species == w.SPECIES_HUMAN
+    assert appearance == w.DEFAULT_DESCRIPTION
+
+
+def test_no_wardrobe_forces_natural_coat_and_skips_negatives():
+    graph, _ = w.build_actor_prompt(
+        description="Dali, a ginger tabby cat with stripes",
+        species=w.SPECIES_QUADRUPED,
+        include_wardrobe=False,
+    )
+
+    assert w.NO_WARDROBE_INSTRUCTION in graph["58"]["inputs"]["value"]
+    assert w.NO_WARDROBE_INSTRUCTION in graph["63"]["inputs"]["value"]
+    assert "natural coat only" in graph["66"]["inputs"]["value"]
+    assert "clothing" in graph["11"]["inputs"]["text"]
+
+    default, _ = w.build_actor_prompt(
+        description="Dali, a ginger tabby cat with stripes",
+        species=w.SPECIES_QUADRUPED,
+    )
+    assert w.NO_WARDROBE_INSTRUCTION not in default["58"]["inputs"]["value"]
+    assert "clothing" not in default["11"]["inputs"]["text"]
+
+
+def test_actor_pipeline_drops_wardrobe_output_when_not_needed():
+    from app.core.schemas import JobRecord, JobStatus
+    from app.pipelines.actor.pipeline import ActorPipeline
+
+    history = {
+        "outputs": {
+            "57": {"images": [{"filename": "w.png", "subfolder": "", "type": "output"}]},
+            "31": {"images": [{"filename": "m.png", "subfolder": "", "type": "output"}]},
+        }
+    }
+
+    def job(include_wardrobe: bool) -> JobRecord:
+        return JobRecord(
+            id="job_wardrobe",
+            pipeline_id="actor",
+            asset_kind="actors",
+            status=JobStatus.succeeded,
+            name="test",
+            params={"include_wardrobe": include_wardrobe},
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+        )
+
+    with_wardrobe = ActorPipeline().map_history_outputs(history, job=job(True))
+    assert "wardrobe_ref" in with_wardrobe
+
+    without = ActorPipeline().map_history_outputs(history, job=job(False))
+    assert "wardrobe_ref" not in without
+    assert "master" in without
+
+
+def test_actor_default_inputs_ships_a_valid_one_by_one_png():
+    from app.pipelines.actor.pipeline import ActorPipeline
+
+    inputs = ActorPipeline().default_inputs()
+    filename, data = inputs[w.BLANK_INPUT_KEY]
+
+    assert filename.endswith(".png")
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    # IHDR width/height immediately follow the 8-byte signature, 4-byte length
+    # and 4-byte chunk type: both must be 1 so the graph's size switch reads
+    # this as "no upload".
+    assert data[16:20] == b"\x00\x00\x00\x01"
+    assert data[20:24] == b"\x00\x00\x00\x01"

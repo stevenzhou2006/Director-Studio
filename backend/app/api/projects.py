@@ -44,6 +44,8 @@ from ..core.library.store import (
     load_asset,
     write_asset,
 )
+from ..core.media.clip_generations import ClipGenerationError
+from ..core.media.concat import concatenate_project_shots
 from ..core.projects.models import (
     Project,
     ProjectMode,
@@ -150,7 +152,14 @@ def _generation_active_http(error: GenerationActiveError) -> HTTPException:
 async def _assert_chat_available() -> None:
     from ..core.vram import get_orchestrator
 
-    reservations = await get_orchestrator().generation_reservations()
+    orch = get_orchestrator()
+    # Remote LLM providers do not use local VRAM, so a running Comfy job does
+    # not need to block Director chat. Legacy/injected orchestrators without a
+    # provider boundary are treated as local.
+    lifecycle = getattr(getattr(orch, "provider", None), "lifecycle", None)
+    if lifecycle is not None and not getattr(lifecycle, "uses_local_gpu", True):
+        return
+    reservations = await orch.generation_reservations()
     if reservations:
         raise GenerationActiveError(reservations)
 
@@ -265,6 +274,31 @@ class ReplaceShotMaterialsBody(BaseModel):
 class ProjectDetailResponse(BaseModel):
     project: Project
     shots: list[Shot] = Field(default_factory=list)
+
+
+class ConcatenateShotsBody(BaseModel):
+    output_name: str | None = None
+    output_kind: Literal["enhanced", "raw"] | None = None
+    reencode: bool = False
+
+
+class ConcatenatedClipInfo(BaseModel):
+    shot_id: str
+    title: str
+    job_id: str
+    generation: int
+    output_kind: str
+    source_path: str
+
+
+class ConcatenateResponse(BaseModel):
+    output_path: str
+    filename: str
+    url: str
+    method: str
+    clip_count: int
+    duration_s: float | None = None
+    clips: list[ConcatenatedClipInfo] = Field(default_factory=list)
 
 
 class SubmitResponse(BaseModel):
@@ -539,6 +573,32 @@ async def plan_project_endpoint(
     return ProjectDetailResponse(project=project, shots=list_shots(project_id))
 
 
+@router.post(
+    "/projects/{project_id}/concatenate",
+    response_model=ConcatenateResponse,
+)
+async def concatenate_project_endpoint(
+    project_id: str,
+    body: ConcatenateShotsBody | None = None,
+) -> ConcatenateResponse:
+    """Join every Shot's newest succeeded H3 clip into one file with ffmpeg."""
+    if load_project(project_id) is None:
+        raise HTTPException(404, "Project not found")
+    options = body or ConcatenateShotsBody()
+    try:
+        result = concatenate_project_shots(
+            project_id=project_id,
+            output_name=options.output_name,
+            output_kind=options.output_kind,
+            reencode=options.reencode,
+        )
+    except ClipGenerationError as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise _http_value_error(e) from e
+    return ConcatenateResponse(**result)
+
+
 def _chat_result_to_response(result) -> ChatResponse:
     assert result.project is not None
     return ChatResponse(
@@ -666,43 +726,85 @@ async def _make_chat_fn(
                     messages and messages[0].get("role") == "system"
                 ):
                     messages.insert(0, {"role": "system", "content": system})
-                try:
-                    result = await client.chat_response(
-                        plan_model,
-                        messages=messages,
-                        tools=None if forced_tool_schema is not None else tools or None,
-                        format=forced_tool_schema or response_format,
-                        require_vision=require_vision or bool(use_images),
-                    )
-                except Exception as exc:
-                    unsupported_tools = (
-                        isinstance(exc, UnsupportedLLMFeatureError)
-                        and exc.feature == "tools"
-                    )
-                    if (
-                        (
-                            not unsupported_tools
-                            and "XML syntax error" not in str(exc)
+                result: dict | None = None
+                streamed = False
+                # Stream tool-capable turns so the chat UI shows reasoning and
+                # answer tokens live instead of one blob at the end. The
+                # orchestrator also re-emits each turn's consolidated reasoning;
+                # the UI de-duplicates it. Servers that reject streaming
+                # transparently fall back to chat_response.
+                if on_progress and hasattr(client, "chat_response_stream"):
+                    try:
+                        async for event in client.chat_response_stream(
+                            plan_model,
+                            messages=messages,
+                            tools=(
+                                None
+                                if forced_tool_schema is not None
+                                else tools or None
+                            ),
+                            format=forced_tool_schema or response_format,
+                        ):
+                            kind = str(event.get("kind") or "")
+                            text = str(event.get("text") or "")
+                            if kind in {"think", "token"} and text:
+                                streamed = True
+                                await on_progress({"type": kind, "text": text})
+                            elif kind == "result":
+                                result = event.get("result")
+                    except Exception:
+                        logger.exception(
+                            "streaming chat failed; retrying without streaming"
                         )
-                        or provided_messages is not None
-                        or use_images
-                        or not tools
-                    ):
-                        raise
-                    await _runtime(
-                        "Native tool formatting failed; retrying once with the text tool protocol…"
-                    )
-                    fallback_prompt = (
-                        f"{system}\n\n{user}\n\n"
-                        "AVAILABLE_TOOLS_JSON:\n"
-                        f"{json.dumps(tools, ensure_ascii=False)}\n\n"
-                        "Return the requested state-changing action as one fenced JSON "
-                        'object shaped exactly like {"tool":"tool_name","params":{...}}. '
-                        "Do not claim the action succeeded; the application will validate "
-                        "and execute it."
-                    )
-                    return await client.generate(plan_model, fallback_prompt)
-                if on_progress:
+                        result = None
+                if result is None:
+                    if on_progress and not streamed:
+                        await _runtime(
+                            "Streaming unavailable — generating the full reply…"
+                        )
+                    try:
+                        result = await client.chat_response(
+                            plan_model,
+                            messages=messages,
+                            tools=(
+                                None
+                                if forced_tool_schema is not None
+                                else tools or None
+                            ),
+                            format=forced_tool_schema or response_format,
+                            require_vision=require_vision or bool(use_images),
+                        )
+                    except Exception as exc:
+                        unsupported_tools = (
+                            isinstance(exc, UnsupportedLLMFeatureError)
+                            and exc.feature == "tools"
+                        )
+                        if (
+                            (
+                                not unsupported_tools
+                                and "XML syntax error" not in str(exc)
+                            )
+                            or provided_messages is not None
+                            or use_images
+                            or not tools
+                        ):
+                            raise
+                        await _runtime(
+                            "Native tool formatting failed; retrying once with the text tool protocol…"
+                        )
+                        fallback_prompt = (
+                            f"{system}\n\n{user}\n\n"
+                            "AVAILABLE_TOOLS_JSON:\n"
+                            f"{json.dumps(tools, ensure_ascii=False)}\n\n"
+                            "Return the requested state-changing action as one fenced JSON "
+                            'object shaped exactly like {"tool":"tool_name","params":{...}}. '
+                            "Do not claim the action succeeded; the application will validate "
+                            "and execute it."
+                        )
+                        return await client.generate(plan_model, fallback_prompt)
+                if on_progress and not streamed:
+                    # Non-streaming fallback: surface the whole turn so the UI
+                    # still shows reasoning and reply instead of staying blank.
                     if result.get("thinking"):
                         await on_progress(
                             {"type": "think", "text": result["thinking"]}

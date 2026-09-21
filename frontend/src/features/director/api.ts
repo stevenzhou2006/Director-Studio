@@ -302,6 +302,17 @@ export async function queueLayout(shotId: string, brief: LayoutBrief): Promise<S
   return res.json();
 }
 
+export async function removeLayoutReference(
+  shotId: string,
+  layoutRefId: string,
+): Promise<Shot> {
+  const res = await fetch(`/api/shots/${shotId}/layouts/${layoutRefId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function reviewLayout(
   shotId: string,
   layoutRefId: string,

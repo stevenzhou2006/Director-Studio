@@ -28,6 +28,8 @@ vi.mock("../shared/project/ProjectContext", () => ({
     setProjectId: vi.fn(),
     refreshProjects: vi.fn(),
     createAndSelect: vi.fn(),
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
   }),
 }));
 

@@ -72,6 +72,7 @@ async def generate_actor(
     project_id: str = Form(""),
     include_headwear: bool = Form(False),
     include_footwear: bool = Form(False),
+    include_wardrobe: bool = Form(True),
     species: str = Form("auto"),
     actor_image: UploadFile | None = File(None),
     wardrobe_image: UploadFile | None = File(None),
@@ -88,6 +89,10 @@ async def generate_actor(
 
     actor_img = await _read_image(actor_image, "actor_image")
     wardrobe_img = await _read_image(wardrobe_image, "wardrobe_image")
+    # No wardrobe requested (e.g. an animal with its natural coat) ⇒ ignore any
+    # uploaded wardrobe image and its headwear/footwear options.
+    if not include_wardrobe:
+        wardrobe_img = None
     has_actor = actor_img is not None
     has_wardrobe = wardrobe_img is not None
     include_headwear = has_wardrobe and include_headwear
@@ -123,6 +128,7 @@ async def generate_actor(
             "has_wardrobe_ref": has_wardrobe,
             "include_headwear": include_headwear,
             "include_footwear": include_footwear,
+            "include_wardrobe": include_wardrobe,
             "species": species if species in ("auto", "human", "quadruped") else "auto",
             "mode": mode,  # display only
         },

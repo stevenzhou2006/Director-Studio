@@ -29,6 +29,9 @@ type ProjectContextValue = {
     scriptText?: string,
     mode?: ProjectMode,
   ) => Promise<Project>;
+  /** Bumped whenever a Library asset is added, imported, or removed. */
+  libraryRevision: number;
+  notifyLibraryChanged: () => void;
 };
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
@@ -44,6 +47,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [libraryRevision, setLibraryRevision] = useState(0);
+
+  const notifyLibraryChanged = useCallback(() => {
+    setLibraryRevision((revision) => revision + 1);
+  }, []);
 
   const refreshProjects = useCallback(async () => {
     setError(null);
@@ -111,6 +119,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setProjectId,
       refreshProjects,
       createAndSelect,
+      libraryRevision,
+      notifyLibraryChanged,
     }),
     [
       projects,
@@ -121,6 +131,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setProjectId,
       refreshProjects,
       createAndSelect,
+      libraryRevision,
+      notifyLibraryChanged,
     ],
   );
 

@@ -282,6 +282,13 @@ def _find_shot(shot_id: str) -> Shot | None:
     return None
 
 
+def _actor_appearance_and_species(asset: LibraryAsset) -> tuple[str, str]:
+    """Return ``(approved_appearance, species)`` for an actor reference."""
+    from ...pipelines.actor.workflow import actor_prompt_identity
+
+    return actor_prompt_identity(asset.meta or {})
+
+
 class DirectorService:
     """Orchestrates plan → context save → reference-frame jobs → prompt rewrite."""
 
@@ -1035,14 +1042,24 @@ class DirectorService:
         source_payload = [
             source.model_dump(mode="json") for source in effective_brief.source_refs
         ]
+        # The visual model authors the shot prompt, but it can hallucinate
+        # garments it never saw in an Actor reference. The reference images are
+        # the final authority, so the compiled prompt is always wrapped with an
+        # explicit authority block (same protection the GPT path already had).
+        authority = self._reference_authority_prefix(effective_brief.source_refs)
+        generation_prompt = (
+            f"{authority}\n\nSHOT REQUEST:\n{direction.compiled_prompt}"
+            if authority
+            else direction.compiled_prompt
+        )
         job = create_job(
             pipeline_id="ref_frame",
             asset_kind="layouts",
             name=f"layout:{shot.title}",
             notes=shot.script_beat,
             params={
-                "description": direction.compiled_prompt,
-                "compiled_prompt": direction.compiled_prompt,
+                "description": generation_prompt,
+                "compiled_prompt": generation_prompt,
                 "visual_director_model": model,
                 "visual_brief": direction.brief.model_dump(),
                 "selected_refs": direction.selected_refs,
@@ -1214,19 +1231,31 @@ class DirectorService:
         )
         return updated
 
-    def _gpt_generation_prompt(self, brief: GptLayoutBrief) -> str:
-        """Make Actor references authoritative before sending the prompt to GPT."""
+    def _reference_authority_prefix(
+        self,
+        source_refs: list[LayoutSourceRef],
+    ) -> str:
+        """Authoritative actor/wardrobe instructions that outrank prompt text.
+
+        The visual model can hallucinate garments it never saw in an Actor
+        reference (for example dressing a bare cat in a robe). Prefixing every
+        generation prompt with this block makes the reference image the final
+        authority so invented clothing cannot override what the Asset shows.
+        """
+        def _slot(source: LayoutSourceRef, position: int) -> int:
+            return source.image_index if source.image_index is not None else position
+
         actor_sources = [
-            (index, source)
-            for index, source in enumerate(brief.source_refs, start=1)
+            (_slot(source, index), source)
+            for index, source in enumerate(source_refs, start=1)
             if source.role == RefRole.actor
         ]
         if not actor_sources:
-            return brief.generation_prompt
+            return ""
 
         costume_images = [
-            f"Image{index}"
-            for index, source in enumerate(brief.source_refs, start=1)
+            f"Image{_slot(source, index)}"
+            for index, source in enumerate(source_refs, start=1)
             if source.role == RefRole.costume
         ]
         lines = ["REFERENCE AUTHORITY - follow this before the shot request:"]
@@ -1236,9 +1265,10 @@ class DirectorService:
             name = (asset.name or asset.id).strip()
             lines.append(
                 f"- {image} is the authoritative character reference for {name}; "
-                "preserve the same exact person, including facial proportions, eye "
-                "shape, nose, lips, jawline, skin tone, hairline, hairstyle, and body "
-                "proportions. Do not recast, beautify, age-shift, or redesign them."
+                "preserve the same exact person or animal, including facial/face "
+                "proportions, eye shape, nose, lips/jaw, skin or fur tone, "
+                "hair/coat, and body proportions. Do not recast, beautify, "
+                "age-shift, species-swap, or redesign them."
             )
             if costume_images:
                 lines.append(
@@ -1248,13 +1278,25 @@ class DirectorService:
                 )
             else:
                 lines.append(
-                    f"- Preserve the approved wardrobe shown in {image}. Do not replace "
-                    "it with a later text-only garment description; a wardrobe change "
-                    "requires an attached costume reference or an explicit user-requested "
-                    "change recorded in the source note."
+                    f"- {image} is the sole authority for {name}'s wardrobe. Reproduce "
+                    "the exact clothing, accessories, and bare/covered state shown in "
+                    "that image, including any bare animal coat, skin, or feet. Do not "
+                    "add, remove, recolor, or restyle any garment, and do not introduce "
+                    "robes, uniforms, armor, boots, collars, or accessories that are not "
+                    "visible in the image."
                 )
+        lines.append(
+            "- If any clothing wording later in this prompt conflicts with a reference "
+            "image, the reference image wins."
+        )
+        return "\n".join(lines)
 
-        return "\n".join(lines) + "\n\nSHOT REQUEST:\n" + brief.generation_prompt
+    def _gpt_generation_prompt(self, brief: GptLayoutBrief) -> str:
+        """Make Actor references authoritative before sending the prompt to GPT."""
+        authority = self._reference_authority_prefix(brief.source_refs)
+        if not authority:
+            return brief.generation_prompt
+        return authority + "\n\nSHOT REQUEST:\n" + brief.generation_prompt
 
     def _collect_gpt_layout_refs(self, brief: GptLayoutBrief) -> dict[str, Any]:
         images: dict[str, tuple[str, bytes]] = {}
@@ -1503,6 +1545,7 @@ class DirectorService:
         Agent ``picture_index`` still matters for H3 / Gate prompts later; only
         the layout-still packing reorders for generation quality.
         """
+        from ...pipelines.actor.workflow import SPECIES_QUADRUPED
         from ...pipelines.ref_frame.workflow import MAX_REF_IMAGES
 
         # EditPlus graph only wires 3 image inputs.
@@ -1528,13 +1571,11 @@ class DirectorService:
             )
         )
 
-        images: dict[str, tuple[str, bytes]] = {}
-        labels: list[str] = []
-        source_refs: list[LayoutSourceRef] = []
+        # Resolve every cast source to an image first, in priority order.
+        resolved: list[dict[str, Any]] = []
         skipped: list[str] = []
         scene_count = 0
         actor_count = 0
-        sent_prop_ids: set[str] = set()
 
         for ref in candidates:
             if ref.role == RefRole.scene and scene_count >= 1:
@@ -1542,9 +1583,6 @@ class DirectorService:
                 continue
             if ref.role == RefRole.actor and actor_count >= 2:
                 skipped.append(f"actor:{ref.asset_id}(actor cap)")
-                continue
-            if len(images) >= max_images:
-                skipped.append(f"{ref.role.value}:{ref.asset_id}(slot full)")
                 continue
 
             kind = role_to_library_kind(ref.role.value)
@@ -1601,44 +1639,186 @@ class DirectorService:
                 skipped.append(f"{ref.role.value}:{ref.asset_id}(no image)")
                 continue
 
-            slot = f"ref_{len(images)}"
-            images[slot] = (filename, data)
+            if ref.role == RefRole.scene:
+                scene_count += 1
+            elif ref.role == RefRole.actor:
+                actor_count += 1
+            resolved.append(
+                {
+                    "ref": ref,
+                    "asset": asset,
+                    "filename": filename,
+                    "data": data,
+                    "used_key": used_key,
+                }
+            )
+
+        # Group into attachment slots. Two actor stills plus a scene and a prop
+        # overflow the three-image limit, so pack the actors into one composite
+        # and keep the prop attached instead of letting the model invent it.
+        from .reference_service import combine_actor_stills
+
+        actor_entries = [e for e in resolved if e["ref"].role == RefRole.actor]
+        prop_entries = [e for e in resolved if e["ref"].role == RefRole.prop]
+        # Only pack an all-quadruped cast. Human multi-actor shots keep the
+        # original one-image-per-actor packing so their behaviour is unchanged.
+        all_quadruped = bool(actor_entries) and all(
+            _actor_appearance_and_species(entry["asset"])[1] == SPECIES_QUADRUPED
+            for entry in actor_entries
+        )
+        combine_actors = (
+            len(actor_entries) >= 2
+            and all_quadruped
+            and bool(prop_entries)
+            and len(resolved) > max_images
+        )
+        combined_pair: tuple[str, bytes] | None = None
+        if combine_actors:
+            combined_pair = combine_actor_stills(
+                [(e["filename"], e["data"]) for e in actor_entries]
+            )
+            if combined_pair is None:
+                combine_actors = False
+            else:
+                skipped.append(
+                    "actors packed into one reference image to keep a prop slot"
+                )
+
+        slots: list[dict[str, Any]] = []
+        if combine_actors and combined_pair is not None:
+            actors_emitted = False
+            for entry in resolved:
+                if entry["ref"].role == RefRole.actor:
+                    if not actors_emitted:
+                        slots.append(
+                            {
+                                "combined": True,
+                                "entries": actor_entries,
+                                "pair": combined_pair,
+                            }
+                        )
+                        actors_emitted = True
+                    continue
+                slots.append({"combined": False, "entries": [entry]})
+        else:
+            slots = [
+                {"combined": False, "entries": [entry]} for entry in resolved
+            ]
+
+        for slot in slots[max_images:]:
+            for entry in slot["entries"]:
+                skipped.append(
+                    f"{entry['ref'].role.value}:{entry['ref'].asset_id}(slot full)"
+                )
+
+        images: dict[str, tuple[str, bytes]] = {}
+        labels: list[str] = []
+        source_refs: list[LayoutSourceRef] = []
+        sent_prop_ids: set[str] = set()
+
+        def _emit_source(entry: dict[str, Any], image_index: int) -> None:
+            ref = entry["ref"]
+            used_key = entry["used_key"] or ""
             source_refs.append(
                 LayoutSourceRef(
                     role=ref.role,
                     asset_id=ref.asset_id,
                     file_key=used_key.split("->", 1)[0] if used_key else None,
                     notes=ref.notes,
+                    image_index=image_index if combine_actors else None,
                 )
             )
+
+        for slot in slots[:max_images]:
+            entries = slot["entries"]
+            image_index = len(images) + 1
+            slot_name = f"ref_{len(images)}"
+
+            if slot["combined"]:
+                pair = slot["pair"]
+                images[slot_name] = (pair[0], pair[1])
+                appearances: list[str] = []
+                species_list: list[str] = []
+                names_list: list[str] = []
+                for entry in entries:
+                    appearance, species = _actor_appearance_and_species(
+                        entry["asset"]
+                    )
+                    name = entry["asset"].name or entry["asset"].id
+                    names_list.append(name)
+                    species_list.append(species)
+                    appearances.append(
+                        f"{name}: {appearance}" if appearance else name
+                    )
+                    _emit_source(entry, image_index)
+                names = ", ".join(names_list)
+                if all(item == SPECIES_QUADRUPED for item in species_list):
+                    anatomy = (
+                        "one image shows TWO separate animals side by side; keep "
+                        "each animal's own species, face, ear shape, eye color, "
+                        "nose, fur/coat color and markings, body build, and tail; "
+                        "no human, no human face, no human hands, no biped "
+                        "standing upright; discard the studio backdrop and place "
+                        "both animals on all fours doing the blocking action IN the scene"
+                    )
+                else:
+                    anatomy = (
+                        "one image shows the separate subjects side by side; keep "
+                        "each exact identity, face/hair/outfit, and body build; "
+                        "discard the studio backdrop and place them doing the "
+                        "blocking action IN the scene"
+                    )
+                labels.append(
+                    f"Image{image_index} CHARACTERS x{len(entries)} ({names}) — "
+                    + " | ".join(appearances)
+                    + f". {anatomy}"
+                )
+                continue
+
+            entry = entries[0]
+            ref = entry["ref"]
+            asset = entry["asset"]
+            used_key = entry["used_key"]
+            images[slot_name] = (entry["filename"], entry["data"])
+            _emit_source(entry, image_index)
             name = asset.name or asset.id
+
             if ref.role == RefRole.scene:
                 labels.append(
-                    f"Image1 SCENE environment ({name}, {used_key}) — "
+                    f"Image{image_index} SCENE environment ({name}, {used_key}) — "
                     f"FULL location must fill the frame (walls/floor/lights/furniture); "
                     f"composite character INTO this set; never pure black/gray studio void"
                 )
-                scene_count += 1
             elif ref.role == RefRole.actor:
-                approved_appearance = str(
-                    (asset.meta or {}).get("description") or ""
-                ).strip()
+                approved_appearance, species = _actor_appearance_and_species(asset)
                 appearance_lock = (
                     f"APPROVED APPEARANCE for this exact character: "
                     f"{approved_appearance}. "
                     if approved_appearance
                     else ""
                 )
+                if species == SPECIES_QUADRUPED:
+                    anatomy = (
+                        "preserve the animal's exact species, face, ear shape, "
+                        "eye color, nose, fur/coat color and markings, body build, "
+                        "and tail; discard studio backdrop; place ONE full-body "
+                        "animal on all fours in a natural quadruped stance doing "
+                        "the blocking action IN the scene; no human, no human "
+                        "face, no human hands, no biped standing upright"
+                    )
+                else:
+                    anatomy = (
+                        "face/hair/outfit identity only; discard studio backdrop; "
+                        "place ONE full/3-quarter body person doing the blocking "
+                        "action IN the scene"
+                    )
                 labels.append(
-                    f"Image{len(images)} CHARACTER ({name}, {used_key}) — "
-                    f"{appearance_lock}"
-                    f"face/hair/outfit identity only; discard studio backdrop; "
-                    f"place ONE full/3-quarter body person doing the blocking action IN the scene"
+                    f"Image{image_index} CHARACTER ({name}, {used_key}) — "
+                    f"{appearance_lock}{anatomy}"
                 )
-                actor_count += 1
             else:
                 labels.append(
-                    f"Image{len(images)} {ref.role.value.upper()} ({name}, {used_key}) — "
+                    f"Image{image_index} {ref.role.value.upper()} ({name}, {used_key}) — "
                     "preserve the object's shape, color, and markings only; discard its "
                     "catalog backdrop and place exactly one according to the shot action"
                 )
@@ -1725,7 +1905,8 @@ class DirectorService:
                     (
                         "Inspect one Director Studio Layout for H3 prompt grounding. "
                         "Describe only visible composition, blocking, scale, eyelines, set geometry, "
-                        "handled props, and lighting. Do not invent story facts."
+                        "handled props, and lighting. Do not describe any subject's wardrobe, hair, "
+                        "fur, skin, garment colors, or other appearance details. Do not invent story facts."
                     ),
                     (
                         f"Shot: {shot.title}\n"
@@ -1750,6 +1931,12 @@ class DirectorService:
                     asset = load_asset(candidate_kind, ref.asset_id)
                     if asset is not None:
                         break
+            approved_description = (
+                str((asset.meta or {}).get("description") or "") if asset else ""
+            )
+            species: str | None = None
+            if asset is not None and ref.role == RefRole.actor:
+                approved_description, species = _actor_appearance_and_species(asset)
             prompt_refs.append(
                 {
                     "role": ref.role.value,
@@ -1758,11 +1945,8 @@ class DirectorService:
                     "file_key": ref.file_key or "",
                     "picture_index": ref.picture_index,
                     "approved_notes": asset.notes if asset else "",
-                    "approved_description": (
-                        str((asset.meta or {}).get("description") or "")
-                        if asset
-                        else ""
-                    ),
+                    "approved_description": approved_description,
+                    "species": species,
                     "visual_analysis": str(
                         (
                             layout_visual_analyses.get(ref.asset_id) or {}

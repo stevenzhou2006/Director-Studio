@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -8,6 +10,8 @@ import httpx
 from openai import APIStatusError, AsyncOpenAI
 
 from .provider import LLMResult, UnsupportedLLMFeatureError
+
+logger = logging.getLogger("director_studio.llm.openai_compatible")
 
 
 def _value(obj: Any, key: str, default: Any = None) -> Any:
@@ -26,6 +30,65 @@ def _image_url(value: str) -> str:
     if value.startswith(("data:", "http://", "https://")):
         return value
     return f"data:image/jpeg;base64,{value}"
+
+
+def _normalize_tool_messages(
+    converted: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map Ollama-style tool call/result messages onto the OpenAI schema.
+
+    The Director orchestrator builds a single conversation for both the Ollama
+    and OpenAI-compatible backends. Ollama pairs a tool result with its call by
+    name, while the OpenAI Chat Completions API requires every assistant tool
+    call to carry an ``id`` and every tool result to answer with a matching
+    ``tool_call_id``. Without this mapping the served model cannot tell which
+    result belongs to which call and repeats the same tool on every turn until
+    the turn budget is exhausted.
+    """
+    counter = 0
+    pending: dict[str, list[str]] = {}
+    for message in converted:
+        role = message.get("role")
+        if role == "assistant":
+            calls = message.get("tool_calls")
+            if not calls:
+                continue
+            pending = {}
+            normalized: list[dict[str, Any]] = []
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                name = str(function.get("name") or call.get("name") or "")
+                arguments = function.get("arguments", call.get("arguments"))
+                if isinstance(arguments, (dict, list)):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                elif arguments is None:
+                    arguments = "{}"
+                else:
+                    arguments = str(arguments)
+                call_id = str(call.get("id") or "").strip() or f"call_{counter}"
+                counter += 1
+                normalized.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": arguments},
+                    }
+                )
+                pending.setdefault(name, []).append(call_id)
+            message["tool_calls"] = normalized
+        elif role == "tool":
+            name = str(message.pop("tool_name", "") or "")
+            call_id = pending[name].pop(0) if pending.get(name) else ""
+            if not call_id:
+                for key in list(pending):
+                    if pending[key]:
+                        call_id = pending[key].pop(0)
+                        break
+            if call_id:
+                message["tool_call_id"] = call_id
+    return converted
 
 
 def _messages(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -47,7 +110,7 @@ def _messages(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
             )
             message["content"] = content
         converted.append(message)
-    return converted
+    return _normalize_tool_messages(converted)
 
 
 def _response_format(
@@ -306,6 +369,132 @@ class OpenAICompatibleClient:
             "thinking": _reasoning(message),
             "tool_calls": normalized_calls,
             "finish_reason": str(choice.finish_reason or ""),
+        }
+
+    async def chat_response_stream(
+        self,
+        model: str,
+        *,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] | None = None,
+        format: dict[str, Any] | str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream a tool-capable chat turn.
+
+        Yields ``{"kind": "think"|"token", "text": ...}`` deltas as they arrive,
+        then a final ``{"kind": "result", "result": LLMResult}`` with the
+        assembled content, reasoning, and tool calls. Callers that cannot use a
+        streaming server should fall back to :meth:`chat_response`.
+        """
+        converted = _messages(messages)
+        request: dict[str, Any] = {
+            "model": model,
+            "messages": converted,
+            "stream": True,
+            **_request_options(options),
+        }
+        extra_body: dict[str, Any] = {}
+        for key in ("enable_thinking", "reasoning_effort"):
+            if key in request:
+                extra_body[key] = request.pop(key)
+        if extra_body:
+            request["extra_body"] = extra_body
+        if tools:
+            request["tools"] = list(tools)
+        converted_format = _response_format(format)
+        if converted_format is not None:
+            request["response_format"] = converted_format
+
+        content_parts: list[str] = []
+        think_parts: list[str] = []
+        tool_calls: dict[int, dict[str, str]] = {}
+        finish_reason = ""
+        stream: Any = None
+        try:
+            try:
+                stream = await self._client.chat.completions.create(**request)
+            except APIStatusError as exc:
+                if request.get("extra_body") and (
+                    "enable_thinking" in _error_text(exc).lower()
+                ):
+                    request.pop("extra_body", None)
+                    stream = await self._client.chat.completions.create(**request)
+                else:
+                    raise
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                thinking = _reasoning(delta)
+                if thinking:
+                    think_parts.append(thinking)
+                    yield {"kind": "think", "text": thinking}
+                content = _value(delta, "content", "")
+                if content:
+                    text = str(content)
+                    content_parts.append(text)
+                    yield {"kind": "token", "text": text}
+                for call in list(getattr(delta, "tool_calls", None) or []):
+                    index = int(getattr(call, "index", 0) or 0)
+                    entry = tool_calls.setdefault(
+                        index,
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    call_id = getattr(call, "id", None)
+                    if call_id:
+                        entry["id"] = str(call_id)
+                    function = getattr(call, "function", None)
+                    if function is not None:
+                        name = getattr(function, "name", None)
+                        if name:
+                            entry["name"] = str(name)
+                        arguments = getattr(function, "arguments", None)
+                        if arguments:
+                            entry["arguments"] += str(arguments)
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = str(choice.finish_reason)
+        finally:
+            # Close the HTTP stream in this generator so the SDK's async
+            # generators do not get garbage-collected mid-request (which raises
+            # "generator didn't stop after athrow()" and can mask the turn).
+            if stream is not None:
+                closer = getattr(stream, "aclose", None) or getattr(
+                    stream, "close", None
+                )
+                if closer is not None:
+                    try:
+                        maybe = closer()
+                        if inspect.isawaitable(maybe):
+                            await maybe
+                    except Exception:
+                        logger.debug("stream close failed", exc_info=True)
+
+        normalized_calls: list[dict[str, Any]] = []
+        for index in sorted(tool_calls):
+            entry = tool_calls[index]
+            arguments: Any = entry["arguments"]
+            try:
+                arguments = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError:
+                arguments = {}
+            normalized_calls.append(
+                {
+                    "id": entry["id"],
+                    "name": entry["name"],
+                    "arguments": arguments if isinstance(arguments, dict) else {},
+                }
+            )
+        yield {
+            "kind": "result",
+            "result": {
+                "content": "".join(content_parts),
+                "thinking": "".join(think_parts),
+                "tool_calls": normalized_calls,
+                "finish_reason": finish_reason,
+            },
         }
 
     @staticmethod

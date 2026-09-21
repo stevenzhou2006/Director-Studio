@@ -18,6 +18,27 @@ def test_order_and_dialogue():
         validate_h3_prompt(text.replace("summary:", "x:"), ["几点？"])
 
 
+def test_duplicate_dialogue_lines_repeat_once_per_occurrence():
+    sections = PromptSections(
+        subject_definitions="A",
+        summary="B",
+        retention_analysis="C",
+        detailed_description="Dali laughs hahaha, then xiaobai laughs hahaha.",
+        overall_soundscape="E",
+        non_diegetic_music="F",
+    )
+    text = compose_h3_prompt(sections)
+
+    # Two characters share the same line: it must appear twice.
+    validate_h3_prompt(text, ["hahaha", "hahaha"])
+
+    with pytest.raises(ValueError, match="exactly 3 times"):
+        validate_h3_prompt(text, ["hahaha", "hahaha", "hahaha"])
+
+    with pytest.raises(ValueError, match="exactly once"):
+        validate_h3_prompt(text, ["hahaha"])
+
+
 def test_audio_tags_must_reference_submitted_audio_but_may_repeat():
     sections = PromptSections(
         subject_definitions="<Audio 1> defines Mia. <Audio 2> defines Daniel.",

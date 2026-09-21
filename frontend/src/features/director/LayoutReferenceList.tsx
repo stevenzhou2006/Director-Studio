@@ -6,16 +6,26 @@ import {
   type Shot,
 } from "../../shared/api/types";
 import { isDisplayableLayout, isRetiredLayout } from "../../shared/layoutReferenceStatus";
+import { removeLayoutReference } from "./api";
 
 interface LayoutReferenceListProps {
   shot: Shot;
   busy: boolean;
   onDiscussAddReference: (description: string) => void;
   onOpenImage: (assetId: string) => void;
+  onShotUpdated?: (shot: Shot) => void;
 }
 
 function isTerminalJobFailure(layout: LayoutReference): boolean {
   return layout.job_status === "failed" || layout.job_status === "cancelled";
+}
+
+function isActiveJob(layout: LayoutReference): boolean {
+  return (
+    layout.job_status === "queued"
+    || layout.job_status === "uploading"
+    || layout.job_status === "running"
+  );
 }
 
 function reviewLabel(status: LayoutReviewStatus | null, layout: LayoutReference): string {
@@ -40,10 +50,16 @@ function LayoutReferenceCard({
   shot,
   layout,
   onOpenImage,
+  onRemove,
+  removing = false,
+  removeDisabled = false,
 }: {
   shot: Shot;
   layout: LayoutReference;
   onOpenImage: (assetId: string) => void;
+  onRemove?: (layout: LayoutReference) => void;
+  removing?: boolean;
+  removeDisabled?: boolean;
 }) {
   const picture = layout.asset_id
     ? shot.refs.find(
@@ -66,6 +82,24 @@ function LayoutReferenceCard({
             {reviewLabel(status, layout)}
           </span>
           {picture ? <span className="layout-picture-badge">Picture {picture.picture_index}</span> : null}
+          {onRemove ? (
+            <button
+              type="button"
+              className="layout-remove-button"
+              aria-label={`Remove ${layout.purpose || "layout reference"}`}
+              title={isActiveJob(layout)
+                ? "Cannot remove a reference frame while its job is running"
+                : "Remove this reference frame"}
+              disabled={removeDisabled || removing || isActiveJob(layout)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onRemove(layout);
+              }}
+            >
+              {removing ? "Removing…" : "Remove"}
+            </button>
+          ) : null}
         </summary>
         <div className="layout-reference-body">
           <div className="layout-reference-rail">
@@ -130,13 +164,15 @@ function LayoutReferenceCard({
   );
 }
 
-export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenImage }: LayoutReferenceListProps) {
+export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenImage, onShotUpdated }: LayoutReferenceListProps) {
   const layouts = shot.layout_refs;
   const displayableLayouts = layouts.filter(isDisplayableLayout);
   const currentLayouts = displayableLayouts.filter((layout) => !isRetiredLayout(layout));
   const retiredLayouts = displayableLayouts.filter(isRetiredLayout);
   const [adding, setAdding] = useState(false);
   const [description, setDescription] = useState("");
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const discuss = () => {
     const trimmed = description.trim();
@@ -146,14 +182,39 @@ export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenI
     setAdding(false);
   };
 
+  const removeReference = async (layout: LayoutReference) => {
+    setRemovingId(layout.id);
+    setRemoveError(null);
+    try {
+      const updated = await removeLayoutReference(shot.id, layout.id);
+      onShotUpdated?.(updated);
+    } catch (cause) {
+      setRemoveError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  const cardProps = (layout: LayoutReference) => ({
+    onRemove: removeReference,
+    removing: removingId === layout.id,
+    removeDisabled: busy,
+  });
+
   return (
     <section className="layout-reference-list" aria-label="Layout references">
+      {removeError ? (
+        <div className="banner error" role="alert">
+          Could not remove reference frame: {removeError}
+        </div>
+      ) : null}
       {currentLayouts.map((layout) => (
         <LayoutReferenceCard
           key={layout.id}
           shot={shot}
           layout={layout}
           onOpenImage={onOpenImage}
+          {...cardProps(layout)}
         />
       ))}
       {retiredLayouts.length ? (
@@ -166,6 +227,7 @@ export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenI
                 shot={shot}
                 layout={layout}
                 onOpenImage={onOpenImage}
+                {...cardProps(layout)}
               />
             ))}
           </div>

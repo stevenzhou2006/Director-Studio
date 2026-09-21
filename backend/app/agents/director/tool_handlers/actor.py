@@ -65,6 +65,8 @@ async def handle_actor_tool(
                 "configuration",
                 "Configure the local ChatGPT Bridge before generating a GPT Actor design",
             )
+        from ....pipelines.actor import workflow as actor_workflow
+
         pipeline_id = "gpt_actor" if provider == "gpt" else "actor"
         job = runtime.create_job(
             pipeline_id=pipeline_id,
@@ -83,6 +85,7 @@ async def handle_actor_tool(
                 "has_wardrobe_ref": False,
                 "mode": "text",
                 "provider": provider,
+                "species": actor_workflow.resolve_species(None, description),
             },
             project_id=project_id,
         )

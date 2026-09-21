@@ -24,7 +24,7 @@ interface Props {
 }
 
 export function CastingPage({ onOpenLibrary }: Props) {
-  const { projectId } = useProject();
+  const { projectId, notifyLibraryChanged } = useProject();
 
   const [defaults, setDefaults] = useState<MetaDefaults | null>(null);
   const [name, setName] = useState("");
@@ -39,6 +39,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
   const [includeHeadwear, setIncludeHeadwear] = useState(false);
   const [includeFootwear, setIncludeFootwear] = useState(false);
   const [species, setSpecies] = useState<"auto" | "human" | "quadruped">("auto");
+  const [includeWardrobe, setIncludeWardrobe] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [job, setJob] = useState<JobRecord | null>(null);
@@ -70,6 +71,8 @@ export function CastingPage({ onOpenLibrary }: Props) {
     setWardrobeImg(null);
     setIncludeHeadwear(false);
     setIncludeFootwear(false);
+    setSpecies("auto");
+    setIncludeWardrobe(true);
     setFieldErrors({});
     setFormError(null);
     setJob(null);
@@ -137,9 +140,12 @@ export function CastingPage({ onOpenLibrary }: Props) {
       fd.set("project_id", projectId);
       if (fixedSeed && seed.trim()) fd.set("seed", seed.trim());
       if (actorImg) fd.set("actor_image", actorImg.file, actorImg.file.name);
-      if (wardrobeImg) fd.set("wardrobe_image", wardrobeImg.file, wardrobeImg.file.name);
-      fd.set("include_headwear", wardrobeImg && includeHeadwear ? "true" : "false");
-      fd.set("include_footwear", wardrobeImg && includeFootwear ? "true" : "false");
+      if (includeWardrobe && wardrobeImg) {
+        fd.set("wardrobe_image", wardrobeImg.file, wardrobeImg.file.name);
+      }
+      fd.set("include_wardrobe", includeWardrobe ? "true" : "false");
+      fd.set("include_headwear", includeWardrobe && wardrobeImg && includeHeadwear ? "true" : "false");
+      fd.set("include_footwear", includeWardrobe && wardrobeImg && includeFootwear ? "true" : "false");
       fd.set("species", species);
       setJob(await generateActor(fd));
     } catch (e) {
@@ -173,6 +179,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
       });
       setSavedActor(actor);
       setJob({ ...job, actor_id: actor.id });
+      notifyLibraryChanged();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -259,20 +266,46 @@ export function CastingPage({ onOpenLibrary }: Props) {
               <select
                 value={species}
                 disabled={isRunning}
-                onChange={(e) =>
-                  setSpecies(e.target.value as "auto" | "human" | "quadruped")
-                }
+                onChange={(e) => {
+                  const next = e.target.value as "auto" | "human" | "quadruped";
+                  setSpecies(next);
+                  if (next === "quadruped") {
+                    setIncludeWardrobe(false);
+                    setWardrobeImg(null);
+                    setIncludeHeadwear(false);
+                    setIncludeFootwear(false);
+                  } else {
+                    setIncludeWardrobe(true);
+                  }
+                }}
               >
                 <option value="auto">Auto (detect from description)</option>
                 <option value="human">Human</option>
                 <option value="quadruped">Quadruped animal (cat, dog…)</option>
               </select>
             </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={includeWardrobe}
+                disabled={isRunning}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setIncludeWardrobe(next);
+                  if (!next) {
+                    setWardrobeImg(null);
+                    setIncludeHeadwear(false);
+                    setIncludeFootwear(false);
+                  }
+                }}
+              />
+              <span>Needs a wardrobe / outfit (uncheck for a natural coat)</span>
+            </label>
           </div>
 
           <div className="block">
             <div className="block-title">References</div>
-            <div className="upload-row two">
+            <div className={`upload-row${includeWardrobe ? " two" : ""}`}>
               <ImageUploadSlot
                 label="Actor"
                 value={actorImg}
@@ -280,19 +313,21 @@ export function CastingPage({ onOpenLibrary }: Props) {
                 disabled={isRunning}
                 error={fieldErrors.actor}
               />
-              <ImageUploadSlot
-                label="Wardrobe"
-                value={wardrobeImg}
-                onChange={(value) => {
-                  setWardrobeImg(value);
-                  if (!value) {
-                    setIncludeHeadwear(false);
-                    setIncludeFootwear(false);
-                  }
-                }}
-                disabled={isRunning}
-                error={fieldErrors.wardrobe}
-              />
+              {includeWardrobe ? (
+                <ImageUploadSlot
+                  label="Wardrobe"
+                  value={wardrobeImg}
+                  onChange={(value) => {
+                    setWardrobeImg(value);
+                    if (!value) {
+                      setIncludeHeadwear(false);
+                      setIncludeFootwear(false);
+                    }
+                  }}
+                  disabled={isRunning}
+                  error={fieldErrors.wardrobe}
+                />
+              ) : null}
             </div>
             {wardrobeImg ? (
               <div className="wardrobe-options">

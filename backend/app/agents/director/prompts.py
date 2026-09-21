@@ -164,17 +164,29 @@ Output rules:
     exit, presence, and absence timing separately as action prose in detailed_description.
   - If there is no layout, lock blocking in prose (screen left/right, who sits where) and
     bind identity/set via actor/scene Picture numbers only.
-- Reference images as <Picture N> when binding identity/wardrobe/set.
+- Reference images as <Picture N> when binding identity/wardrobe/set. When refs include
+  asset_name, bind each named actor to that actor's own picture_index and never swap,
+  merge, or reassign actor Pictures, even in a multi-actor shot. Take every actor's
+  species, face, hair, fur, and wardrobe from that actor's Picture and its approved
+  metadata; never invent, recolor, or add clothing, accessories, hairstyles, or colors
+  that are not present there. If an actor has no approved appearance description, defer
+  to the Picture (for example, "LILY, exactly as shown in <Picture 2>") instead of
+  describing or guessing.
 - Voice references arrive in Audio order. Bind every selected voice with its correct
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
 - Treat each ref's approved_description and approved_notes as authoritative for
-  identity, wardrobe, set and prop appearance; never replace them with guesses.
+  identity, wardrobe, set and prop appearance; never replace them with guesses. A
+  Layout's visual_analysis describes composition, blocking, and lighting only: never
+  copy wardrobe, hair, fur, or color details from it.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
-- Each dialogue line must appear exactly once in the full prompt package (usually in detailed_description).
+- Each dialogue line must appear in the full prompt package (usually in
+  detailed_description) exactly once per occurrence in the dialogue list above. A
+  unique line appears once; a line that repeats because two characters share it (for
+  example both say "hahaha") appears once per speaker, and no extra copies.
 """
 
 # Backward-compatible name used by existing Director integrations.

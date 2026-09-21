@@ -41,6 +41,10 @@ class LayoutSourceRef(BaseModel):
     asset_id: str
     file_key: str | None = None
     notes: str = ""
+    # 1-based attachment slot. Two sources may share one slot when several
+    # subjects are packed into a single composite reference image. ``None``
+    # means the source follows its position in the list.
+    image_index: int | None = None
 
 
 class ClipTailFrameOrigin(BaseModel):
@@ -79,7 +83,13 @@ class LayoutReference(BaseModel):
 
     @model_validator(mode="after")
     def _limit_source_images(self) -> "LayoutReference":
-        if self.provider == LayoutProvider.comfy and len(self.source_refs) > 3:
+        if self.provider != LayoutProvider.comfy:
+            return self
+        indices = [
+            ref.image_index if ref.image_index is not None else position
+            for position, ref in enumerate(self.source_refs, start=1)
+        ]
+        if indices and max(indices) > 3:
             raise ValueError("a Comfy Layout accepts at most 3 source images")
         return self
 

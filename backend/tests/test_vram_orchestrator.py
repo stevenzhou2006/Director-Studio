@@ -418,6 +418,34 @@ async def test_comfy_does_not_start_when_local_lifecycle_release_fails():
 
 
 @pytest.mark.asyncio
+async def test_remote_llm_session_ignores_pending_generation(monkeypatch):
+    lifecycle = RecordingRemoteLifecycle()
+    provider = FakeProvider(lifecycle, provider_id="openai-compatible")
+    orch = VramOrchestrator(
+        provider=provider,
+        comfy=FakeComfy(),
+        models=["remote-model"],
+    )
+    monkeypatch.setattr(
+        "app.core.vram.director_model.get_director_model",
+        lambda provider_id=None: "remote-model",
+    )
+    await orch.reserve_generation(
+        job_id="job_video",
+        pipeline_id="h3_ref2va",
+        kind="video",
+        status="running",
+        phase="generating",
+        queued_at="2026-08-31T10:00:00+00:00",
+    )
+
+    async with orch.llm_session(fail_if_generation_pending=True):
+        await orch.ensure_llm_ready()
+
+    assert lifecycle.prepared == ["remote-model"]
+
+
+@pytest.mark.asyncio
 async def test_remote_llm_session_does_not_free_comfy_or_claim_gpu(monkeypatch):
     lifecycle = RecordingRemoteLifecycle()
     comfy = FakeComfy()

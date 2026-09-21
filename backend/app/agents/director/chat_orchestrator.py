@@ -82,6 +82,22 @@ _SCRIPT_LOCKED_MESSAGE = (
 )
 _MAX_STORYBOARD_SUBMISSIONS = 3
 
+# Native tool-calling turns are not capped to save tokens on local models. The
+# ceiling exists only so a genuinely stuck model cannot loop forever; repeated
+# identical tool batches are the primary loop signal.
+_MAX_TOOL_TURNS = 20
+_MAX_IDENTICAL_TOOL_BATCHES = 3
+_LOOP_LIMIT_REPLY = (
+    "The Director stopped this turn because the model kept repeating the same "
+    "tool call without making progress. No further changes were applied. Please "
+    "restate the request, or break it into a smaller step."
+)
+_TURN_LIMIT_REPLY = (
+    "The Director stopped this turn after the model reached the tool-call turn "
+    "limit without finishing. No unapplied changes were kept. Please retry, or "
+    "break the request into a smaller step."
+)
+
 # chat_fn(system, user, images=optional base64 list for multimodal)
 ChatFn = Callable[..., Awaitable[str | dict[str, Any]]]
 # progress event: {"type": "status"|"runtime"|"think"|"token"|"tool", "text": "..."}
@@ -245,6 +261,13 @@ _STORYBOARD_CONTINUATION_PROMPT = (
     "claiming that you are submitting or retrying. Do not narrate a future tool call."
 )
 
+_DIRECTOR_CONTINUATION_PROMPT = (
+    "Your previous reply was reasoning only: it gave the user no answer and made "
+    "no tool call, so nothing advanced. Respond now with either the tool call that "
+    "moves this request forward or a concise final answer to the user. Do not emit "
+    "another plan or chain of thought."
+)
+
 
 def _status_summary(project: Project, shots: list[Shot]) -> str:
     if not shots:
@@ -351,6 +374,7 @@ Recommended pipeline; use judgment to decide when to advance:
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
 8) write_prompt — generate or rewrite the six H3 sections after a reference frame exists; no approval step is required
 9) H3 video generation happens later in Production
+10) concatenate_shots — once every Shot has a succeeded H3 clip, assemble the finished clips in Shot order into one file with ffmpeg and report the absolute host path it returns
 
 Tools (name + args):
 - set_script  {"script":"..."}  // only when the user supplies or changes story content; a question is not set_script
@@ -368,6 +392,7 @@ Tools (name + args):
 - extract_clip_tail_frame  {"source_shot_id":"...","target_shot_id":"...","source_version":"latest|vN","source_job_id":null,"output_kind":"enhanced|raw"}
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
+- concatenate_shots  {"output_name":"optional stem","output_kind":"enhanced|raw","reencode":false}  // joins all finished Shot clips in order; report the absolute output path
 - write_prompt / get_status
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
@@ -451,6 +476,28 @@ def _native_reply(value: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]]
 
 def _tool_name(item: dict[str, Any]) -> str:
     return str(item.get("name") or "").strip()
+
+
+def _tool_batch_signature(tools: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Stable fingerprint for one turn's repeatable tool calls.
+
+    Storyboard saves are excluded: they carry their own submission budget, so a
+    rejected candidate may legitimately be resubmitted a bounded number of times.
+    """
+    parts: list[str] = []
+    for tool in tools:
+        name = _tool_name(tool)
+        if not name or name == "save_storyboard":
+            continue
+        args = tool.get("args")
+        serialized = json.dumps(
+            args if isinstance(args, dict) else {},
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+        parts.append(f"{name}:{serialized}")
+    return tuple(sorted(parts))
 
 
 def sanitize_tools_for_pipeline(
@@ -1302,8 +1349,10 @@ async def orchestrate_chat(
             conversation[0]["images"] = vision_b64
         final_reply = ""
         storyboard_retry_pending = False
+        reasoning_continuations = 0
+        tool_batch_counts: dict[tuple[str, ...], int] = {}
 
-        for _tool_turn in range(4):
+        for _tool_turn in range(_MAX_TOOL_TURNS):
             native_content, native_think, native_tools = _native_reply(raw)
             if native_think:
                 await progress("think", native_think)
@@ -1317,7 +1366,7 @@ async def orchestrate_chat(
                     native_tools = fallback_tools
                 else:
                     should_force_storyboard_continuation = (
-                        _tool_turn < 3
+                        _tool_turn < _MAX_TOOL_TURNS - 1
                         and not storyboard_budget.exhausted
                         and (
                             (
@@ -1332,14 +1381,33 @@ async def orchestrate_chat(
                             )
                         )
                     )
-                    if should_force_storyboard_continuation:
+                    # A reasoning model can spend the whole turn in chain-of-thought
+                    # and emit neither an answer nor a tool call. Nudge it to commit
+                    # instead of failing the turn outright.
+                    should_force_reasoning_continuation = (
+                        not should_force_storyboard_continuation
+                        and _tool_turn < _MAX_TOOL_TURNS - 1
+                        and not native_content.strip()
+                        and bool(native_think.strip())
+                        and reasoning_continuations < 2
+                    )
+                    if (
+                        should_force_storyboard_continuation
+                        or should_force_reasoning_continuation
+                    ):
+                        if should_force_reasoning_continuation:
+                            reasoning_continuations += 1
                         conversation.append(
                             {"role": "assistant", "content": native_content}
                         )
                         conversation.append(
                             {
                                 "role": "user",
-                                "content": _STORYBOARD_CONTINUATION_PROMPT,
+                                "content": (
+                                    _STORYBOARD_CONTINUATION_PROMPT
+                                    if should_force_storyboard_continuation
+                                    else _DIRECTOR_CONTINUATION_PROMPT
+                                ),
                             }
                         )
                         project = load_project(project_id) or project
@@ -1399,6 +1467,24 @@ async def orchestrate_chat(
                     part for part in (native_content, notes_text) if part
                 )
                 break
+
+            loop_tools = native_tools + [
+                tool for tool, _payload in unknown_tool_results
+            ]
+            batch_signature = _tool_batch_signature(loop_tools)
+            if batch_signature:
+                batch_count = tool_batch_counts.get(batch_signature, 0) + 1
+                tool_batch_counts[batch_signature] = batch_count
+                if batch_count > _MAX_IDENTICAL_TOOL_BATCHES:
+                    repeated = ", ".join(
+                        sorted({spec.split(":", 1)[0] for spec in batch_signature})
+                    )
+                    await progress(
+                        "status",
+                        f"Stopping a repeated tool loop: {repeated}.",
+                    )
+                    final_reply = _LOOP_LIMIT_REPLY
+                    break
 
             if native_tools:
                 await progress("status", f"Executing {len(native_tools)} model tool(s)...")
@@ -1485,6 +1571,7 @@ async def orchestrate_chat(
                     "queue_gpt_ref_frame",
                     "queue_actor_design",
                     "accept_ref_frame",
+                    "concatenate_shots",
                 }:
                     terminal_tool_reply = "\n".join(tool_notes).strip()
 
@@ -1526,12 +1613,12 @@ async def orchestrate_chat(
                 if followup_think:
                     await progress("think", followup_think)
                 break
-            if _tool_turn == 3:
+            if _tool_turn == _MAX_TOOL_TURNS - 1:
                 final_content, final_think, final_tools = _native_reply(raw)
                 if final_think:
                     await progress("think", final_think)
                 final_reply = (
-                    "Tool calling exceeded the four-turn safety limit."
+                    _TURN_LIMIT_REPLY
                     if final_tools
                     else final_content or final_reply
                 )
@@ -1539,7 +1626,7 @@ async def orchestrate_chat(
                     storyboard_save_blocked = True
                 break
         else:
-            final_reply = "Tool calling exceeded the four-turn safety limit."
+            final_reply = _TURN_LIMIT_REPLY
 
         if not final_reply:
             refreshed_project = load_project(project_id)

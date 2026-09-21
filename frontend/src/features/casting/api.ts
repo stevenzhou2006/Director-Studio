@@ -27,6 +27,7 @@ export interface JobRecord {
   has_wardrobe_ref: boolean;
   include_headwear: boolean;
   include_footwear: boolean;
+  include_wardrobe?: boolean;
   species?: "auto" | "human" | "quadruped";
   seed: number | null;
   fixed_seed: boolean;
@@ -52,6 +53,7 @@ export interface ActorRecord {
   has_wardrobe_ref?: boolean;
   include_headwear?: boolean;
   include_footwear?: boolean;
+  include_wardrobe?: boolean;
   species?: "auto" | "human" | "quadruped";
   seed: number | null;
   job_id: string;

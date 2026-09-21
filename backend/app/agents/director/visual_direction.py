@@ -199,10 +199,17 @@ def _analysis_prompt(
     review_image_used: bool = False,
     feedback: str = "",
 ) -> str:
-    character_count = sum(
-        bool(re.match(r"^\s*Image\d+\s*(?:=\s*)?(?:ACTOR|CHARACTER)\b", caption, re.I))
-        for caption in captions
-    )
+    def _character_count(caption: str) -> int:
+        match = re.match(
+            r"^\s*Image\d+\s*(?:=\s*)?(?:ACTOR|CHARACTERS?)\b(?:\s*x(\d+))?",
+            caption,
+            re.I,
+        )
+        if not match:
+            return 0
+        return int(match.group(1) or 1)
+
+    character_count = sum(_character_count(caption) for caption in captions)
     review_block = ""
     layout_block = ""
     if layout_brief is not None:
@@ -259,6 +266,18 @@ def _analysis_prompt(
         "composition; the generated image is a static composition reference, not a promise "
         "that it is the first frame. Return only one JSON object. Preserve visible scene architecture and extract visible "
         "actor identity, hairstyle, body build, and every garment including footwear. "
+        "WARDROBE GROUNDING: transcribe wardrobe only from what is actually visible in that "
+        "character's own attachment. Never invent, guess, or upgrade clothing from the "
+        "genre, setting, shot title, or prior shots. If a character wears no clothing "
+        "(an animal with a natural coat, or bare feet), write exactly 'natural coat, no "
+        "clothing' or 'bare feet' in wardrobe_lock and say so in generation_prompt; do not "
+        "dress an unclothed subject. In generation_prompt, keep wardrobe image-referential: "
+        "name each ImageN as the authority for that character's exact clothing and state "
+        "that ImageN's outfit must be reproduced unchanged, rather than listing colors or "
+        "garment types that may not be present. "
+        "If a CHARACTER caption marks the subject as an animal or quadruped, keep that "
+        "subject species-accurate on all fours with no human face or hands, and never add "
+        "or substitute a person who is not attached as a reference. "
         f"The characters array MUST contain exactly {character_count} distinct entries: "
         "one for every attached ACTOR/CHARACTER image, each referenced exactly once. Design "
         "a shot-specific frame position, body angle, head direction, pose, and interaction. "

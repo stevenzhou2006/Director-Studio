@@ -159,6 +159,67 @@ async def test_chat_response_converts_images_tools_schema_and_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_response_pairs_ollama_style_tool_results_to_openai_ids() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _chat_response(content="done")
+
+    client = _client(handler)
+    try:
+        await client.chat_response(
+            "local-model",
+            messages=[
+                {"role": "user", "content": "plan it"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_status",
+                                "arguments": {"shot_id": "sht_1"},
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_name": "get_status",
+                    "content": '{"ok": true}',
+                },
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "get_status", "parameters": {"type": "object"}},
+                }
+            ],
+        )
+    finally:
+        await client.close()
+
+    sent = bodies[0]["messages"]
+    assistant = sent[1]
+    assert assistant["tool_calls"] == [
+        {
+            "id": "call_0",
+            "type": "function",
+            "function": {
+                "name": "get_status",
+                "arguments": '{"shot_id": "sht_1"}',
+            },
+        }
+    ]
+    tool_result = sent[2]
+    assert tool_result["role"] == "tool"
+    assert tool_result["tool_call_id"] == "call_0"
+    assert "tool_name" not in tool_result
+
+
+@pytest.mark.asyncio
 async def test_stream_normalizes_reasoning_and_text_deltas() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         events = [
@@ -213,6 +274,109 @@ async def test_stream_normalizes_reasoning_and_text_deltas() -> None:
         {"kind": "think", "text": "thinking"},
         {"kind": "token", "text": "hello"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_response_stream_assembles_reasoning_tokens_and_tool_calls() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        events = [
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {"reasoning_content": "plan"},
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {"index": 0, "finish_reason": None, "delta": {"content": "Let me "}}
+                ]
+            },
+            {
+                "choices": [
+                    {"index": 0, "finish_reason": None, "delta": {"content": "check."}}
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_status",
+                                        "arguments": '{"a":',
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": None,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": "1}"}}
+                            ]
+                        },
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {"index": 0, "finish_reason": "tool_calls", "delta": {}}
+                ]
+            },
+        ]
+        body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        body += "data: [DONE]\n\n"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+        )
+
+    client = _client(handler)
+    events: list[dict] = []
+    try:
+        async for event in client.chat_response_stream(
+            "test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "get_status", "parameters": {}},
+                }
+            ],
+        ):
+            events.append(event)
+    finally:
+        await client.close()
+
+    assert [event["kind"] for event in events] == [
+        "think",
+        "token",
+        "token",
+        "result",
+    ]
+    result = events[-1]["result"]
+    assert result["content"] == "Let me check."
+    assert result["thinking"] == "plan"
+    assert result["tool_calls"] == [
+        {"id": "call_1", "name": "get_status", "arguments": {"a": 1}}
+    ]
+    assert result["finish_reason"] == "tool_calls"
 
 
 @pytest.mark.asyncio

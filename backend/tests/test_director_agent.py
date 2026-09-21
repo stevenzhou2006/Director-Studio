@@ -1746,6 +1746,47 @@ async def test_context_saved_before_comfy(director_dirs, monkeypatch):
     assert updated.status != ShotStatus.queued
 
 
+def test_reference_authority_prefix_makes_actor_wardrobe_authoritative(director_dirs):
+    from app.agents.director.service import DirectorService
+
+    actor = _seed_actor_asset(director_dirs["library"])
+    svc = DirectorService(plan_provider=object(), orchestrator=object())
+
+    prefix = svc._reference_authority_prefix(
+        [
+            LayoutSourceRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                file_key="master",
+                notes="P1 Test Actor",
+            )
+        ]
+    )
+
+    assert "REFERENCE AUTHORITY" in prefix
+    assert "Image1 is the sole authority" in prefix
+    assert "bare animal coat" in prefix
+    assert "the reference image wins" in prefix
+
+
+def test_reference_authority_prefix_is_empty_without_actor_sources(director_dirs):
+    from app.agents.director.service import DirectorService
+
+    scene = _seed_scene_asset(director_dirs["library"])
+    svc = DirectorService(plan_provider=object(), orchestrator=object())
+
+    assert svc._reference_authority_prefix(
+        [
+            LayoutSourceRef(
+                role=RefRole.scene,
+                asset_id=scene.id,
+                file_key="master",
+                notes="P1 Cafe",
+            )
+        ]
+    ) == ""
+
+
 @pytest.mark.asyncio
 async def test_visual_direction_failure_is_non_blocking_without_starting_job(
     director_dirs, monkeypatch

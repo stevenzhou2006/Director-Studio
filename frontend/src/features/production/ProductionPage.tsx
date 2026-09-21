@@ -15,12 +15,14 @@ import { useProject } from "../../shared/project/ProjectContext";
 import { promptReady, shotWorkflowStatus } from "../../shared/shotWorkflowStatus";
 import {
   cancelH3Job,
+  concatenateShots,
   deleteLayout,
   getH3Job,
   getH3ProviderStatus,
   getProject,
   patchShot,
   submitShot,
+  type ConcatenateResult,
   type H3JobRecord,
   type H3Provider,
   type H3ProviderStatus,
@@ -213,6 +215,9 @@ export function ProductionPage({
   const [h3Provider, setH3Provider] = useState<H3Provider>("local");
   const [resolutionPreset, setResolutionPreset] =
     useState<ResolutionPreset>("auto");
+  const [concatBusy, setConcatBusy] = useState(false);
+  const [concatResult, setConcatResult] = useState<ConcatenateResult | null>(null);
+  const [concatError, setConcatError] = useState<string | null>(null);
 
   const selected = useMemo(
     () => shots.find((s) => s.id === selectedId) || null,
@@ -234,6 +239,8 @@ export function ProductionPage({
   useEffect(() => {
     setSelectedId(null);
     setH3Job(null);
+    setConcatResult(null);
+    setConcatError(null);
     if (!projectId) {
       setShots([]);
     }
@@ -449,6 +456,19 @@ export function ProductionPage({
     }
   };
 
+  const onConcatenateAll = async () => {
+    if (!projectId) return;
+    setConcatError(null);
+    setConcatBusy(true);
+    try {
+      setConcatResult(await concatenateShots(projectId));
+    } catch (e) {
+      setConcatError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConcatBusy(false);
+    }
+  };
+
   const orderedRefs = useMemo(() => {
     if (!selected) return [];
     return [...selected.refs].sort((a, b) => a.picture_index - b.picture_index);
@@ -554,6 +574,40 @@ export function ProductionPage({
     </label>
   );
 
+  const finalFilmPanel =
+    projectId && shots.length > 0 ? (
+      <section className="final-film-panel" aria-label="Final film">
+        <div className="final-film-head">
+          <div>
+            <strong>Final film</strong>
+            <div className="muted tiny">Join every shot's latest H3 clip in order.</div>
+          </div>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={busy || concatBusy}
+            onClick={() => void onConcatenateAll()}
+          >
+            {concatBusy ? "Concatenating…" : "Concatenate all shots"}
+          </button>
+        </div>
+        {concatError ? <div className="banner error">{concatError}</div> : null}
+        {concatResult ? (
+          <div className="final-film-result">
+            <p className="muted tiny">
+              {`${concatResult.clip_count} clips · ${
+                concatResult.duration_s
+                  ? `${concatResult.duration_s.toFixed(1)}s · `
+                  : ""
+              }${concatResult.method === "copy" ? "stream copy" : "re-encode"}`}
+            </p>
+            <video controls playsInline preload="metadata" src={concatResult.url} />
+            <p className="muted tiny final-film-path">{concatResult.output_path}</p>
+          </div>
+        ) : null}
+      </section>
+    ) : null;
+
   if (mobile) {
     const selectedNumber = selected
       ? Math.max(0, shots.findIndex((shot) => shot.id === selected.id)) + 1
@@ -574,6 +628,8 @@ export function ProductionPage({
         </header>
 
         {error ? <div className="banner error mobile-production-error">{error}</div> : null}
+
+        {finalFilmPanel}
 
         {!projectId ? (
           <p className="mobile-production-empty">Select a project to review its shots.</p>
@@ -753,6 +809,8 @@ export function ProductionPage({
     >
       <ProductionWorkflowProfile profile={workflowProfile} error={workflowProfileError} job={h3Job} />
       {error ? <div className="banner error">{error}</div> : null}
+
+      {finalFilmPanel}
 
       <div className="split-layout production-split">
         <aside className="split-side">

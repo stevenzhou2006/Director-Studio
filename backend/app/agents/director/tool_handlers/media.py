@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....core.media.clip_generations import ClipGenerationAmbiguous
 from ....core.media import tail_frame
+from ....core.media.clip_generations import (
+    ClipGenerationAmbiguous,
+    ClipGenerationError,
+)
+from ....core.media.concat import concatenate_project_shots
 from ....core.projects.models import Project, Shot
 from ....core.projects.store import load_shot
 
@@ -27,6 +31,15 @@ async def handle_media_tool(
     if name in {"get_status", "status"}:
         actions.append("status")
         notes.append(runtime.status_summary(project, shots))
+        return True
+    if name == "concatenate_shots":
+        _handle_concatenate_shots(
+            args=args,
+            project_id=project_id,
+            actions=actions,
+            notes=notes,
+            result_payloads=result_payloads,
+        )
         return True
     if name != "extract_clip_tail_frame":
         return False
@@ -102,3 +115,43 @@ async def handle_media_tool(
         "and is not yet in the H3 Picture pack."
     )
     return True
+
+
+def _handle_concatenate_shots(
+    *,
+    args: dict[str, Any],
+    project_id: str,
+    actions: list[str],
+    notes: list[str],
+    result_payloads: list[dict[str, Any]] | None,
+) -> None:
+    output_name = args.get("output_name")
+    output_name = str(output_name).strip() if output_name else None
+    output_kind = args.get("output_kind")
+    output_kind = str(output_kind).strip() if output_kind else None
+    if output_kind not in (None, "enhanced", "raw"):
+        output_kind = None
+    reencode = bool(args.get("reencode"))
+    try:
+        result = concatenate_project_shots(
+            project_id=project_id,
+            output_name=output_name,
+            output_kind=output_kind,
+            reencode=reencode,
+        )
+    except (ClipGenerationError, ValueError) as exc:
+        if result_payloads is not None:
+            result_payloads.append({"ok": False, "error": str(exc)})
+        notes.append(f"concatenate_shots failed: {exc}")
+        return
+
+    actions.append("concatenate_shots")
+    if result_payloads is not None:
+        result_payloads.append(result)
+    method = "stream copy" if result["method"] == "copy" else "re-encode"
+    notes.append(
+        f"Concatenated {result['clip_count']} shot clip(s) into "
+        f"**{result['filename']}** ({method}). Output file on this host:\n"
+        f"`{result['output_path']}`\n"
+        f"Preview: {result['url']}"
+    )

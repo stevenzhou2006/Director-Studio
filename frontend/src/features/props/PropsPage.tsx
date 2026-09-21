@@ -24,7 +24,7 @@ interface Props {
 }
 
 export function PropsPage({ onOpenLibrary }: Props) {
-  const { projectId, project } = useProject();
+  const { projectId, project, notifyLibraryChanged } = useProject();
 
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
@@ -139,6 +139,7 @@ export function PropsPage({ onOpenLibrary }: Props) {
       });
       setSaved(record);
       setJob({ ...job, prop_id: record.id });
+      notifyLibraryChanged();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {

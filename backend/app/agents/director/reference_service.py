@@ -219,6 +219,51 @@ def _crop_sheet_front_panel(
         return None
 
 
+def combine_actor_stills(
+    stills: list[tuple[str, bytes]],
+) -> tuple[str, bytes] | None:
+    """Lay actor identity stills side by side into one reference image.
+
+    Used when two actor references plus a scene and a prop would exceed the
+    three-image Qwen limit. Packing the actors frees a slot so a real prop
+    asset can still be attached instead of being invented by the model.
+    """
+    try:
+        import io
+
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        opened = [
+            Image.open(io.BytesIO(data)).convert("RGB") for _name, data in stills
+        ]
+        if len(opened) < 2:
+            return None
+        target_h = min(image.height for image in opened)
+        resized = []
+        for image in opened:
+            scale = target_h / image.height
+            resized.append(
+                image.resize((max(1, int(image.width * scale)), target_h))
+            )
+        divider = max(4, target_h // 200)
+        total_w = sum(image.width for image in resized) + divider * (len(resized) - 1)
+        canvas = Image.new("RGB", (total_w, target_h), (255, 255, 255))
+        x = 0
+        for index, image in enumerate(resized):
+            canvas.paste(image, (x, 0))
+            x += image.width
+            if index < len(resized) - 1:
+                x += divider
+        buf = io.BytesIO()
+        canvas.save(buf, format="PNG")
+        return "actor_pair.png", buf.getvalue()
+    except Exception:
+        logger.exception("combine actor stills failed")
+        return None
+
+
 def _scene_image_for_ref_frame(
     asset: LibraryAsset,
     *,
@@ -299,6 +344,23 @@ def _actor_image_for_ref_frame(
     3) last resort: full sheet (prompt must fight layout copy)
     """
     from ...core.library.images import resolve_asset_image
+    from ...pipelines.actor.workflow import SPECIES_QUADRUPED, actor_prompt_identity
+
+    _, species = actor_prompt_identity(asset.meta or {})
+    if species == SPECIES_QUADRUPED and preferred_key != "input_actor":
+        # A quadruped's single "master" can be an anthropomorphic upright render
+        # (human casting boilerplate leaked into the master prompt), while the
+        # turnaround sheet carries the true on-all-fours anatomy. Prefer the
+        # sheet's front panel so Layouts are conditioned on the real animal.
+        for key in ("fullbody_threeview", "asset_sheet", "bust_threeview"):
+            hit = resolve_asset_image(asset, role="actor", file_key=key)
+            if not hit:
+                continue
+            name, data, used = hit
+            cropped = _crop_sheet_front_panel(data, force=True)
+            if cropped:
+                return cropped[0], cropped[1], f"{used}->front_crop"
+            return name, data, used
 
     # Explicit non-sheet keys first
     for key in (

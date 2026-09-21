@@ -22,7 +22,7 @@ const GROUPS: { id: VisibleLibraryKind; label: string; empty: string }[] = [
 export function LibraryOverview({ onSelectKind }: {
   onSelectKind: (kind: VisibleLibraryKind) => void;
 }) {
-  const { projectId } = useProject();
+  const { projectId, libraryRevision, notifyLibraryChanged } = useProject();
   const [groups, setGroups] = useState<Record<string, LibraryAsset[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,7 +55,7 @@ export function LibraryOverview({ onSelectKind }: {
         if (active) setError(cause instanceof Error ? cause.message : String(cause));
       });
     return () => { active = false; };
-  }, [projectId]);
+  }, [projectId, libraryRevision]);
 
   const onDeleteAsset = async (asset: LibraryAsset) => {
     const fileCount = Object.values(asset.urls || {}).filter(Boolean).length;
@@ -72,6 +72,7 @@ export function LibraryOverview({ onSelectKind }: {
       setDetailAsset(null);
       const assets = await listLibraryAssets(kind, projectId);
       setGroups((current) => ({ ...current, [kind]: assets }));
+      notifyLibraryChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

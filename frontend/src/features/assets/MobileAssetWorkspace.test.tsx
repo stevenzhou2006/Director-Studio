@@ -13,7 +13,12 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null }),
+  useProject: () => ({
+    project: state.project,
+    projectId: state.project?.id ?? null,
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
+  }),
 }));
 vi.mock("../library/LibraryPage", () => ({
   LibraryPage: ({ lockedKind, mobile }: { lockedKind?: string; mobile?: boolean }) => (

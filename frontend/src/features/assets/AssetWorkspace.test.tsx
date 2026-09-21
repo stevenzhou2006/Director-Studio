@@ -8,7 +8,12 @@ import { AssetWorkspace } from "./AssetWorkspace";
 const state = vi.hoisted(() => ({ project: null as Project | null }));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ project: state.project, projectId: state.project?.id ?? null }),
+  useProject: () => ({
+    project: state.project,
+    projectId: state.project?.id ?? null,
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
+  }),
 }));
 vi.mock("../library/LibraryPage", () => ({
   LibraryPage: ({ lockedKind }: { lockedKind?: string }) => (

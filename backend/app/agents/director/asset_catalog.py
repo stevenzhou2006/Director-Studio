@@ -31,7 +31,14 @@ def _inventory(project_id: str | None = None) -> list[dict[str, Any]]:
             source_filename = str(meta.get("source_filename") or "")
             if source_filename and source_filename not in filenames:
                 filenames.append(source_filename)
-            description = str(meta.get("description") or asset.notes or "")[:240]
+            description = str(meta.get("description") or asset.notes or "")
+            species: str | None = None
+            if kind == "actors":
+                from ...pipelines.actor.workflow import actor_prompt_identity
+
+                appearance, species = actor_prompt_identity(meta)
+                description = appearance or str(asset.notes or "")
+            description = description[:240]
             items.append(
                 {
                     "id": asset.id,
@@ -39,6 +46,7 @@ def _inventory(project_id: str | None = None) -> list[dict[str, Any]]:
                     "name": asset.name,
                     "notes": (asset.notes or "")[:240],
                     "description": description,
+                    "species": species,
                     "source_filename": source_filename,
                     "filenames": filenames[:8],
                     "tags": meta.get("tags") or [],

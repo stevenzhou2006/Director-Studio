@@ -178,7 +178,7 @@ function DirectorAgentWorkspace({
   mobile: boolean;
   requestedMessage: DirectorChatRequest | null;
 }) {
-  const { projectId, refreshProjects, createAndSelect } = useProject();
+  const { projectId, refreshProjects, createAndSelect, notifyLibraryChanged } = useProject();
   const [shots, setShots] = useState<Shot[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -207,7 +207,11 @@ function DirectorAgentWorkspace({
   const seenLayouts = useRef<Set<string>>(new Set());
   const shotRevision = useRef(0);
   const handledRequestId = useRef<string | null>(null);
-  const generationLocked = vramStatus?.chat_locked === true;
+  const generationActive = vramStatus?.chat_locked === true;
+  // A remote LLM provider does not use the local GPU, so a running Comfy job
+  // does not block Director chat.
+  const llmUsesLocalGpu = vramStatus?.llm_runtime?.uses_local_gpu !== false;
+  const generationLocked = generationActive && llmUsesLocalGpu;
   const chatActive = chatSession.active;
   const chatDisabled = busy || generationLocked || chatActive || !llmModel;
 
@@ -300,10 +304,10 @@ function DirectorAgentWorkspace({
   }, [projectId, refreshVramStatus]);
 
   useEffect(() => {
-    if (!generationLocked) return;
+    if (!generationActive) return;
     const timer = window.setInterval(() => setClockNow(new Date()), 1000);
     return () => window.clearInterval(timer);
-  }, [generationLocked]);
+  }, [generationActive]);
 
   const onChangeLlm = async (model: string) => {
     if (!model || model === llmModel) return;
@@ -388,7 +392,11 @@ function DirectorAgentWorkspace({
         if (disposed) return;
         if (session.active) {
           setChatSession(session);
-          setLiveRuntime("LLM busy — response is still running");
+          // Keep the stream's own runtime label; only fall back to this when
+          // the live stream is not reporting (e.g. after a page reload).
+          setLiveRuntime(
+            (prev) => prev || "LLM busy — response is still running",
+          );
           return;
         }
         setChatSession(IDLE_CHAT_SESSION);
@@ -450,6 +458,7 @@ function DirectorAgentWorkspace({
                 })),
               },
             ]);
+            notifyLibraryChanged();
           }
         })
         .catch((cause) => {
@@ -533,7 +542,14 @@ function DirectorAgentWorkspace({
       const handlers = {
         onStatus: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
         onRuntime: (t: string) => setLiveRuntime(t),
-        onThink: (t: string) => setLiveThink((prev) => prev + t),
+        // Reasoning streams as deltas and is also re-sent once per turn as the
+        // consolidated text, so drop a payload the stream already produced.
+        onThink: (t: string) =>
+          setLiveThink((prev) => {
+            if (!t || t === prev || prev.endsWith(t)) return prev;
+            if (t.startsWith(prev)) return t;
+            return prev + t;
+          }),
         onToken: (t: string) => setLiveTokens((prev) => prev + t),
         onTool: (t: string) => setLiveStatus((s) => [...s.slice(-40), t]),
       };
@@ -577,6 +593,7 @@ function DirectorAgentWorkspace({
         },
       ]);
       replaceShots(res.shots);
+      notifyLibraryChanged();
       await refreshProjects();
     } catch (e) {
       if (
@@ -748,7 +765,7 @@ function DirectorAgentWorkspace({
         {pollError ? <div className="banner error" role="alert" aria-live="polite">{pollError}</div> : null}
         {vramPollError ? <div className="banner error" role="alert" aria-live="polite">{vramPollError}</div> : null}
 
-        {generationLocked && vramStatus ? (
+        {generationActive && vramStatus ? (
           <div className="director-generation-status" role="status" aria-live="polite">
             <span className="director-generation-dot" aria-hidden="true" />
             <span>{generationStatusText(vramStatus, clockNow)}</span>
@@ -776,7 +793,7 @@ function DirectorAgentWorkspace({
               ) : null}
               {m.thinking ? (
                 <details className="chat-think" open={false}>
-                  <summary>Reasoning</summary>
+                  <summary>Thinking</summary>
                   <pre className="chat-think-body">{m.thinking}</pre>
                 </details>
               ) : null}
@@ -798,33 +815,33 @@ function DirectorAgentWorkspace({
           })}
           {busy || chatActive ? (
             <div className="chat-bubble assistant live">
-              <div className="chat-role">Director · Working</div>
+              <div className="chat-role">Director</div>
+              {liveThink ? (
+                <details className="chat-think" open={false}>
+                  <summary>Thinking…</summary>
+                  <pre className="chat-think-body">{liveThink}</pre>
+                </details>
+              ) : null}
               {liveStatus.length ? (
-                <div className="chat-trace open">
-                  <div className="chat-trace-label">Process</div>
+                <details className="chat-trace" open={false}>
+                  <summary>Steps ({liveStatus.length})</summary>
                   <ol className="chat-steps">
                     {liveStatus.map((s, j) => (
                       <li key={j}>{s}</li>
                     ))}
                   </ol>
-                </div>
-              ) : !liveRuntime ? (
-                <div className="chat-content muted">Connecting…</div>
+                </details>
               ) : null}
-              {liveRuntime ? (
-                <div className="chat-runtime" aria-live="polite">
-                  <div className="chat-trace-label">Runtime</div>
-                  <div>{liveRuntime}</div>
-                </div>
-              ) : null}
-              {liveThink ? (
-                <div className="chat-think open">
-                  <div className="chat-trace-label">Reasoning</div>
-                  <pre className="chat-think-body">{liveThink}</pre>
+              {!liveTokens && !liveThink ? (
+                <div className="chat-content muted">
+                  {liveRuntime || "Thinking…"}
                 </div>
               ) : null}
               {liveTokens ? (
-                <div className="chat-content draft-tokens">{liveTokens}</div>
+                <div className="chat-content streaming">
+                  {liveTokens}
+                  <span className="chat-caret" aria-hidden="true" />
+                </div>
               ) : null}
             </div>
           ) : null}

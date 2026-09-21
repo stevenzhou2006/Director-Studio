@@ -6,7 +6,11 @@ import { CastingPage } from "./CastingPage";
 import { fetchDefaults, generateActor, listActorJobs, type JobRecord } from "./api";
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ projectId: "prj_test" }),
+  useProject: () => ({
+    projectId: "prj_test",
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
+  }),
 }));
 
 vi.mock("./api", () => ({
@@ -100,5 +104,37 @@ describe("CastingPage", () => {
     const form = vi.mocked(generateActor).mock.calls[0][0];
     expect(form.get("include_headwear")).toBe("true");
     expect(form.get("include_footwear")).toBe("true");
+  });
+
+  it("skips wardrobe for a quadruped animal by default", async () => {
+    vi.mocked(generateActor).mockResolvedValue({
+      ...finishedJob,
+      id: "actjob_cat",
+      status: "queued",
+      name: "Dali",
+    });
+
+    render(<CastingPage onOpenLibrary={() => undefined} />);
+    await waitFor(() => expect(fetchDefaults).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("Species"), {
+      target: { value: "quadruped" },
+    });
+
+    expect(screen.queryByLabelText("Wardrobe")).toBeNull();
+    const wardrobeToggle = screen.getByLabelText(/Needs a wardrobe/) as HTMLInputElement;
+    expect(wardrobeToggle.checked).toBe(false);
+
+    fireEvent.change(screen.getByLabelText(/Name/), { target: { value: "Dali" } });
+    fireEvent.change(screen.getByLabelText(/Actor description/), {
+      target: { value: "a ginger tabby cat" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate Actor" }));
+
+    await waitFor(() => expect(generateActor).toHaveBeenCalledOnce());
+    const form = vi.mocked(generateActor).mock.calls[0][0];
+    expect(form.get("include_wardrobe")).toBe("false");
+    expect(form.get("species")).toBe("quadruped");
+    expect(form.get("wardrobe_image")).toBeNull();
   });
 });

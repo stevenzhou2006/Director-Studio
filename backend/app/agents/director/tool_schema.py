@@ -360,6 +360,41 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         required=["source_shot_id", "target_shot_id"],
     ),
     function_tool(
+        "concatenate_shots",
+        (
+            "Join the finished H3 clips of every Shot, in project Shot order, "
+            "into one video file on the host running Director Studio. Use after "
+            "every Shot has a succeeded H3 clip; it resolves each Shot's newest "
+            "succeeded clip automatically. Tries a fast stream copy and falls "
+            "back to a full re-encode. The result includes the absolute output "
+            "path to report to the user."
+        ),
+        {
+            "output_name": {
+                "type": "string",
+                "description": (
+                    "Optional output filename or stem; a .mp4 extension is "
+                    "added automatically."
+                ),
+            },
+            "output_kind": {
+                "type": "string",
+                "enum": ["enhanced", "raw"],
+                "description": (
+                    "Which materialized video output to use. Omit to prefer "
+                    "enhanced and fall back to raw."
+                ),
+            },
+            "reencode": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Force a full filter re-encode instead of a stream copy."
+                ),
+            },
+        },
+    ),
+    function_tool(
         "accept_ref_frame",
         (
             "Record acceptance from this Director conversation on one existing "
@@ -458,6 +493,7 @@ def director_tool_schemas(
             "set_shot_scene_ref",
             "queue_ref_frame",
             "extract_clip_tail_frame",
+            "concatenate_shots",
             "accept_ref_frame",
             "revise_ref_frame",
             "write_prompt",

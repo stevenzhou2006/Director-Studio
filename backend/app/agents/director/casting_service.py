@@ -467,7 +467,13 @@ def _validate_materialized_storyboard_bindings(
         for ref in shot.refs:
             asset = index.get(ref.asset_id)
             inventory_item = inventory_by_id.get(ref.asset_id)
-            if asset is None or inventory_item is None:
+            # Layout references are intentionally absent from the casting
+            # inventory (layouts are never cast), so they are validated against
+            # the asset index alone. Requiring an inventory entry here made
+            # every stored shot with a layout impossible to re-validate, which
+            # blocked patch_shot_refs and other materialized-binding updates.
+            needs_inventory = ref.role != RefRole.layout_ref_frame
+            if asset is None or (needs_inventory and inventory_item is None):
                 raise ValueError(
                     f"shot {shot_index} materialized inaccessible image asset "
                     f"{ref.asset_id!r}"

@@ -8,7 +8,12 @@ import { importExternalAsset, listLibraryAssets } from "./api";
 const updateLibraryAssetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../shared/project/ProjectContext", () => ({
-  useProject: () => ({ projectId: "prj_test", project: { name: "Voice film" } }),
+  useProject: () => ({
+    projectId: "prj_test",
+    project: { name: "Voice film" },
+    notifyLibraryChanged: vi.fn(),
+    libraryRevision: 0,
+  }),
 }));
 
 vi.mock("./api", () => ({

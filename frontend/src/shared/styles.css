@@ -63,6 +63,11 @@
 .production-workflow-profile { display: grid; gap: 6px; margin-bottom: 18px; color: var(--muted); }
 .production-workflow-profile > span { color: var(--text); font-weight: 600; }
 .production-workflow-profile > small { font-size: .8rem; }
+.final-film-panel { display: grid; gap: 12px; padding: 14px 16px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.final-film-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.final-film-result { display: grid; gap: 8px; justify-items: start; }
+.final-film-result video { width: 100%; max-width: 480px; max-height: 360px; border-radius: 8px; background: #000; }
+.final-film-path { word-break: break-all; font-family: var(--mono, monospace); }
 @media (max-width: 1050px) {
   .h3-workflow-setup { grid-template-columns: 220px minmax(0, 1fr); gap: 16px; }
   .workflow-binding { grid-template-columns: 100px minmax(0, 1fr); }
@@ -432,6 +437,8 @@ code {
 .chat-content {
   font-size: 0.95rem;
   line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-bubble.live {
@@ -492,6 +499,28 @@ code {
   opacity: 0.9;
   border-top: 1px dashed var(--border);
   padding-top: 0.45rem;
+}
+
+.chat-content.streaming {
+  margin-top: 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-caret {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 0.12rem;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: chat-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes chat-caret-blink {
+  to {
+    opacity: 0;
+  }
 }
 
 .director-generation-status {
@@ -799,6 +828,23 @@ code {
   font-family: var(--mono);
   font-size: 0.67rem;
   padding: 0.16rem 0.38rem;
+}
+
+.layout-remove-button {
+  margin-left: auto;
+  border: 1px solid rgba(240, 113, 120, 0.45);
+  border-radius: 999px;
+  background: rgba(240, 113, 120, 0.12);
+  color: var(--danger);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.67rem;
+  padding: 0.2rem 0.55rem;
+}
+
+.layout-remove-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .layout-reference-evidence {

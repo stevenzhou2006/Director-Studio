@@ -471,6 +471,7 @@ def test_ref_frame_library_save_failure_marks_exact_layout_terminal(
             "asset_id": "scn_retry",
             "file_key": "wide",
             "notes": "preserve for retry",
+            "image_index": None,
         }
     ]
     shot = _make_shot(

@@ -436,6 +436,39 @@ async def test_empty_native_model_response_is_reported_instead_of_project_status
         assert "new chat" not in result.reply.lower()
 
 
+@pytest.mark.asyncio
+async def test_reasoning_only_reply_is_nudged_to_a_final_answer(tmp_projects_dir):
+    project = create_project("Reasoning only", "A door opens.")
+    calls = []
+
+    async def chat_fn(system, user, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {
+                "content": "",
+                "thinking": "Let me weigh the composition options at length.",
+                "tool_calls": [],
+            }
+        assert kwargs["messages"][-1]["content"].startswith(
+            "Your previous reply was reasoning only"
+        )
+        return {
+            "content": "The composition is sound; no change is needed.",
+            "thinking": "",
+            "tool_calls": [],
+        }
+
+    result = await handle_chat(
+        project_id=project.id,
+        message="Please improve the composition.",
+        svc=object(),
+        chat_fn=chat_fn,
+    )
+
+    assert len(calls) == 2
+    assert result.reply == "The composition is sound; no change is needed."
+
+
 def test_parse_tools_accepts_bare_single_tool_schema_output():
     reply, tools = _parse_tools_from_llm(
         '{"tool":"queue_gpt_ref_frame","params":{"shot_id":"shot_1"}}'
@@ -1115,6 +1148,76 @@ async def test_asset_coverage_review_rejects_a_stale_script_hash(tmp_projects_di
     assert actions == []
     assert payloads == [{"ok": False, "error": notes[0].split(": ", 1)[1]}]
     assert "script changed" in notes[0].lower()
+
+
+def test_materialized_bindings_allow_layout_refs_outside_casting_inventory(
+    tmp_path,
+    monkeypatch,
+):
+    from app.agents.director.asset_catalog import _asset_index, _inventory
+    from app.agents.director.casting_service import (
+        _validate_materialized_storyboard_bindings,
+    )
+    from app.config import settings
+    from app.core.library.store import write_asset
+
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    monkeypatch.setattr(settings, "library_root", library_root)
+
+    actor = write_asset(
+        LibraryAsset(
+            id="act_bind_dali",
+            kind="actors",
+            name="Dali",
+            pipeline_id="external",
+            job_id="job_bind_actor",
+            created_at="2026-01-01T00:00:00+00:00",
+            files={"fullbody_threeview": "dali.png"},
+        )
+    )
+    layout = write_asset(
+        LibraryAsset(
+            id="lay_bind_launch",
+            kind="layouts",
+            name="The Launch",
+            pipeline_id="external",
+            job_id="job_bind_layout",
+            created_at="2026-01-01T00:00:00+00:00",
+            files={"layout": "launch.png"},
+        )
+    )
+
+    shot = Shot(
+        id="sht_bind_layout",
+        project_id="prj_bind",
+        scene_id="sc_bind",
+        title="Launch",
+        script_beat="Dali launches.",
+        duration_s=5.0,
+        refs=[
+            ShotRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                picture_index=1,
+                file_key="fullbody_threeview",
+            ),
+            ShotRef(
+                role=RefRole.layout_ref_frame,
+                asset_id=layout.id,
+                picture_index=2,
+                file_key="layout",
+            ),
+        ],
+    )
+
+    inventory = _inventory(None)
+    index = _asset_index(None)
+    # Layouts are never castable, so they stay out of the casting inventory.
+    assert all(item["id"] != layout.id for item in inventory)
+    # A stored shot that binds one must still re-validate (regression guard for
+    # patch_shot_refs on shots that carry a Layout reference).
+    _validate_materialized_storyboard_bindings([shot], inventory=inventory, index=index)
 
 
 @pytest.mark.asyncio
@@ -2548,13 +2651,21 @@ async def test_native_safety_limit_rejects_mixed_prose_and_pending_storyboard_sa
         ],
     }
 
+    from app.agents.director.chat_orchestrator import (
+        _MAX_TOOL_TURNS as max_tool_turns,
+    )
+
     async def chat_fn(system: str, user: str, **kwargs):
         calls.append(kwargs)
-        if len(calls) <= 4:
+        if len(calls) <= max_tool_turns:
+            # Distinct arguments keep each batch unique so loop detection does
+            # not fire; this exercises the hard turn-limit safeguard instead.
             return {
                 "content": "",
                 "thinking": "",
-                "tool_calls": [{"name": "get_status", "arguments": {}}],
+                "tool_calls": [
+                    {"name": "get_status", "arguments": {"step": len(calls)}}
+                ],
             }
         return {
             "content": "The storyboard was saved.",
@@ -2571,9 +2682,9 @@ async def test_native_safety_limit_rejects_mixed_prose_and_pending_storyboard_sa
         chat_fn=chat_fn,
     )
 
-    assert len(calls) == 5
+    assert len(calls) == max_tool_turns + 1
     assert svc.save_calls == 0
-    assert result.actions == ["llm", "status", "status", "status", "status"]
+    assert result.actions == ["llm"] + ["status"] * max_tool_turns
     assert result.reply.startswith(
         "Storyboard was not saved; existing project shots remain unchanged."
     )
@@ -2582,6 +2693,65 @@ async def test_native_safety_limit_rejects_mixed_prose_and_pending_storyboard_sa
     persisted_after = load_project(project.id)
     assert persisted_after is not None
     assert persisted_after.model_dump() == persisted_before.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_native_repeated_identical_tool_batch_stops_a_loop(tmp_projects_dir):
+    project = create_project(
+        "Looping model",
+        "INT. ROOM - NIGHT\nMara listens to the intact recorder.",
+    )
+    old = Shot(
+        id="sht_loop_old",
+        project_id=project.id,
+        scene_id="sc00",
+        title="Existing plan",
+        script_beat="This plan survives the loop.",
+        duration_s=12.0,
+    )
+    save_shot(old)
+    save_project(project.model_copy(update={"script_locked": True, "shot_ids": [old.id]}))
+    save_agent_context(
+        project.id,
+        AgentContext(
+            project_id=project.id,
+            script_hash=_script_hash(project.script_text),
+            shot_summaries=[{"id": old.id}],
+        ),
+    )
+
+    class _Service:
+        def __init__(self):
+            self.save_calls = 0
+
+        async def save_storyboard(self, *args, **kwargs):
+            self.save_calls += 1
+            raise AssertionError("a looping turn must not persist a storyboard")
+
+    svc = _Service()
+    calls: list[dict] = []
+
+    async def chat_fn(system: str, user: str, **kwargs):
+        calls.append(kwargs)
+        return {
+            "content": "",
+            "thinking": "",
+            "tool_calls": [{"name": "get_status", "arguments": {}}],
+        }
+
+    result = await handle_chat(
+        project_id=project.id,
+        message="Continue evaluating the locked storyboard.",
+        svc=svc,
+        chat_fn=chat_fn,
+    )
+
+    # Three identical batches run, the fourth is refused by loop detection.
+    assert len(calls) == 4
+    assert svc.save_calls == 0
+    assert result.actions == ["llm", "status", "status", "status"]
+    assert "kept repeating the same tool call" in result.reply.lower()
+    assert [shot.model_dump() for shot in list_shots(project.id)] == [old.model_dump()]
 
 
 @pytest.mark.asyncio
@@ -3184,6 +3354,7 @@ def test_project_context_serializes_complete_layout_reference_state(
                     "asset_id": "scn_room",
                     "file_key": "wide",
                     "notes": "door geometry",
+                    "image_index": None,
                 }
             ],
             "job_status": "failed",

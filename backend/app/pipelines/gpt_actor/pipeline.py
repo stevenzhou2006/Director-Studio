@@ -53,7 +53,9 @@ class GptActorPipeline(ExternalPipeline):
         project_id: str | None = None,
     ) -> LibraryAsset:
         from ...core.library import save_asset_from_job
+        from ..actor import workflow as actor_workflow
 
+        species, description = actor_workflow.resolve_actor_identity(job.params or {})
         return save_asset_from_job(
             job,
             name=name,
@@ -61,6 +63,8 @@ class GptActorPipeline(ExternalPipeline):
             file_keys=["master"],
             meta={
                 **dict(job.params or {}),
+                "species": species,
+                "description": description,
                 "provider": "gpt",
                 "review_status": "approved_by_chat",
             },

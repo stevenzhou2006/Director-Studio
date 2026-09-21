@@ -34,7 +34,7 @@ function angleLabel(prompt: string): string {
 }
 
 export function SetDesignPage({ onOpenLibrary }: Props) {
-  const { projectId, project } = useProject();
+  const { projectId, project, notifyLibraryChanged } = useProject();
 
   const [defaults, setDefaults] = useState<SceneMetaDefaults | null>(null);
   const [name, setName] = useState("");
@@ -194,6 +194,7 @@ export function SetDesignPage({ onOpenLibrary }: Props) {
       });
       setSaved(scene);
       setJob({ ...job, scene_id: scene.id });
+      notifyLibraryChanged();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {

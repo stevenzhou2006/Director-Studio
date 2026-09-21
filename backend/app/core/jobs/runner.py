@@ -157,11 +157,15 @@ async def start_pipeline_job(
 
     `images` maps logical input names (e.g. "actor", "wardrobe") to (filename, bytes).
     """
-    images = images or {}
+    images = dict(images or {})
+    pipeline = get_pipeline(job.pipeline_id)
+    default_inputs = getattr(pipeline, "default_inputs", None)
+    if callable(default_inputs):
+        for kind, value in default_inputs().items():
+            images.setdefault(kind, value)
     for kind, (filename, data) in images.items():
         store.save_input_file(job.id, kind, filename, data, project_id=job.project_id)
 
-    pipeline = get_pipeline(job.pipeline_id)
     prepare_submission = getattr(pipeline, "prepare_job_submission", None)
     if callable(prepare_submission):
         try:

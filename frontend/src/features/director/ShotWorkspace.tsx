@@ -257,6 +257,7 @@ export function ShotWorkspace({
                         const url = layoutPreviewUrl(assetId);
                         if (url) onOpenImage(url);
                       }}
+                      onShotUpdated={onShotUpdated}
                     />
                   ) : (
                     <div className="shot-document-empty">

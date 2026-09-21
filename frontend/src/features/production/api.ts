@@ -151,6 +151,43 @@ export async function getH3Job(jobId: string): Promise<H3JobRecord> {
   return res.json();
 }
 
+export interface ConcatenatedClipInfo {
+  shot_id: string;
+  title: string;
+  job_id: string;
+  generation: number;
+  output_kind: string;
+  source_path: string;
+}
+
+export interface ConcatenateResult {
+  output_path: string;
+  filename: string;
+  url: string;
+  method: "copy" | "reencode";
+  clip_count: number;
+  duration_s: number | null;
+  clips: ConcatenatedClipInfo[];
+}
+
+/** Join every Shot's newest succeeded H3 clip into one file with ffmpeg. */
+export async function concatenateShots(
+  projectId: string,
+  body?: {
+    output_name?: string;
+    output_kind?: "enhanced" | "raw";
+    reencode?: boolean;
+  },
+): Promise<ConcatenateResult> {
+  const res = await fetch(`/api/projects/${projectId}/concatenate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function cancelH3Job(jobId: string): Promise<H3JobRecord> {
   const res = await fetch(`/api/h3-ref2va/jobs/${jobId}/cancel`, { method: "POST" });
   if (!res.ok) throw new Error(await parseError(res));

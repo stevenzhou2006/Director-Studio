@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectDetail, PromptSections, Shot } from "../../shared/api/types";
 import { ProductionPage } from "./ProductionPage";
-import { deleteLayout, getH3Job, getProject, patchShot, submitShot } from "./api";
+import { concatenateShots, deleteLayout, getH3Job, getProject, patchShot, submitShot } from "./api";
 import { listLibraryAssets } from "../library/api";
 
 const replaceShotMaterialsMock = vi.hoisted(() => vi.fn());
@@ -21,6 +21,7 @@ vi.mock("../../shared/project/ProjectContext", () => ({
 vi.mock("./api", () => ({
   getProject: vi.fn(),
   cancelH3Job: vi.fn(),
+  concatenateShots: vi.fn(),
   deleteLayout: vi.fn(),
   getH3Job: vi.fn(),
   getH3ProviderStatus: getH3ProviderStatusMock,
@@ -726,5 +727,49 @@ describe("ProductionPage prompt refresh", () => {
         height: 704,
       }),
     );
+  });
+
+  it("concatenates every shot into a final film from the Production header", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+    vi.mocked(concatenateShots).mockResolvedValue({
+      output_path: "/data/projects/prj_test/renders/final.mp4",
+      filename: "final.mp4",
+      url: "/api/files/projects/prj_test/renders/final.mp4",
+      method: "copy",
+      clip_count: 2,
+      duration_s: 12.34,
+      clips: [],
+    });
+
+    render(<ProductionPage active />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Concatenate all shots" }),
+    );
+
+    await waitFor(() =>
+      expect(concatenateShots).toHaveBeenCalledWith("prj_test"),
+    );
+    expect(
+      await screen.findByText("/data/projects/prj_test/renders/final.mp4"),
+    ).toBeTruthy();
+    expect(screen.getByText(/2 clips/)).toBeTruthy();
+    const video = document.querySelector("video");
+    expect(video?.getAttribute("src")).toBe(
+      "/api/files/projects/prj_test/renders/final.mp4",
+    );
+  });
+
+  it("reports a concatenate failure without losing the workspace", async () => {
+    vi.mocked(getProject).mockResolvedValue(detail(shot(generatedPrompt)));
+    vi.mocked(concatenateShots).mockRejectedValue(
+      new Error("cannot concatenate: no succeeded H3 clip for Shot 2"),
+    );
+
+    render(<ProductionPage active />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Concatenate all shots" }),
+    );
+
+    expect(await screen.findByText(/cannot concatenate/)).toBeTruthy();
   });
 });

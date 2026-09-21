@@ -368,11 +368,9 @@ class VramOrchestrator:
                 logger.exception("llm_session on_status failed")
 
         if not self.provider.lifecycle.uses_local_gpu:
-            async with self._cv:
-                if fail_if_generation_pending:
-                    reservations = self._generation_snapshot_unlocked()
-                    if reservations:
-                        raise GenerationActiveError(reservations)
+            # A remote LLM does not contend for local VRAM, so a pending Comfy
+            # generation must not block chat turns (even when the caller passes
+            # fail_if_generation_pending for the local-GPU case).
             yield self
             return
 

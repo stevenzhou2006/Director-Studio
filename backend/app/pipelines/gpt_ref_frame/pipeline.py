@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from ...config import settings
+from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import JobRecord, LibraryAsset
 from ...integrations.chatgpt_bridge import ChatGptBridgeClient
 from ..base import ExternalPipeline, ExternalPipelineResult
@@ -41,6 +42,7 @@ class GptRefFramePipeline(ExternalPipeline):
         prompt = str(params.get("generation_prompt") or "").strip()
         if not prompt:
             raise ValueError("generation_prompt is required")
+        prompt = append_global_prompt(prompt, effective_global_prompt(job.project_id))
         raw_keys = params.get("image_keys")
         if not isinstance(raw_keys, list):
             raise ValueError("image_keys must be an ordered source list")

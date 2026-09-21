@@ -380,6 +380,51 @@ async def test_chat_response_stream_assembles_reasoning_tokens_and_tool_calls() 
 
 
 @pytest.mark.asyncio
+async def test_schema_output_pins_greedy_temperature() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _chat_response(content="{}")
+
+    client = _client(handler)
+    try:
+        await client.chat_response(
+            "test-model",
+            messages=[{"role": "user", "content": "return status"}],
+            format={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            options={"temperature": 0.7},
+        )
+    finally:
+        await client.close()
+
+    assert bodies[0]["response_format"]["type"] == "json_schema"
+    assert bodies[0]["temperature"] == 0
+
+
+@pytest.mark.asyncio
+async def test_freeform_call_keeps_requested_temperature() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _chat_response(content="hi")
+
+    client = _client(handler)
+    try:
+        await client.chat_response(
+            "test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            options={"temperature": 0.7},
+        )
+    finally:
+        await client.close()
+
+    assert "response_format" not in bodies[0]
+    assert bodies[0]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
 async def test_schema_rejection_retries_once_without_response_format() -> None:
     bodies: list[dict] = []
 

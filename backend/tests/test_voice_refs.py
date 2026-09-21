@@ -84,7 +84,10 @@ def _seed_actor(project_id: str, asset_id: str = "act_mia") -> LibraryAsset:
 
 def _full_voice_prompt() -> PromptSections:
     return PromptSections(
-        subject_definitions="<Audio 1> defines Mia's voice identity.",
+        subject_definitions=(
+            "<Picture 1> defines Mia's appearance; "
+            "<Audio 1> defines Mia's voice identity."
+        ),
         summary="Mia speaks.",
         retention_analysis="The reply holds attention.",
         detailed_description="Mia says: Go now.",
@@ -294,7 +297,7 @@ def test_submit_rejects_native_audio_instead_of_using_private_lock(
             "refs": [ShotRef(role=RefRole.actor, asset_id="act_mia", picture_index=1)],
             "voice_refs": [voice_ref],
             "prompt_sections": PromptSections(
-                subject_definitions="Mia",
+                subject_definitions="<Picture 1> defines Mia.",
                 summary="Mia speaks.",
                 retention_analysis="Hold attention.",
                 detailed_description="Mia says: Go now.",

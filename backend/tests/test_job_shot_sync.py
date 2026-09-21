@@ -296,8 +296,11 @@ def test_new_layout_completion_becomes_the_only_current_h3_layout(isolated_data)
     previous, replacement = updated.layout_refs
     assert previous.asset_id == "lay_previous"
     assert previous.selected_for_h3 is False
+    # Replace mode retires the previous active Layout into history.
+    assert previous.superseded_by == replacement.id
     assert replacement.asset_id == updated.layout_asset_id
     assert replacement.selected_for_h3 is True
+    assert replacement.superseded_by is None
     assert [ref.asset_id for ref in updated.refs] == [replacement.asset_id]
 
 
@@ -347,6 +350,8 @@ def test_append_layout_completion_preserves_existing_active_layout(isolated_data
     updated = load_shot(project.id, shot.id)
     assert updated is not None
     assert [layout.selected_for_h3 for layout in updated.layout_refs] == [True, True]
+    # Append mode keeps the existing active Layout; nothing is superseded.
+    assert all(layout.superseded_by is None for layout in updated.layout_refs)
     assert [ref.asset_id for ref in updated.refs] == [
         "lay_mia_alone",
         updated.layout_refs[1].asset_id,

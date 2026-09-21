@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from ...config import settings
+from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import JobRecord, LibraryAsset
 from ...integrations.chatgpt_bridge import ChatGptBridgeClient
 from ..base import ExternalPipeline, ExternalPipelineResult
@@ -37,6 +38,7 @@ class GptActorPipeline(ExternalPipeline):
         prompt = str((job.params or {}).get("generation_prompt") or "").strip()
         if not prompt:
             raise ValueError("generation_prompt is required")
+        prompt = append_global_prompt(prompt, effective_global_prompt(job.project_id))
         client = ChatGptBridgeClient.from_settings()
         result = await client.generate_image(prompt, [])
         return ExternalPipelineResult(

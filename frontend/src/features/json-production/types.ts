@@ -14,11 +14,15 @@ export interface JsonProductionPicture {
   index: number;
   role: JsonPictureRole;
   label: string;
+  asset_id?: string | null;
+  file_key?: string | null;
 }
 
 export interface JsonProductionAudio {
   index: number;
   label: string;
+  asset_id?: string | null;
+  file_key?: string | null;
 }
 
 export interface JsonProductionShot {

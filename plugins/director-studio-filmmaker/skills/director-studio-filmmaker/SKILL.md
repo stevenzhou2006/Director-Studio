@@ -127,6 +127,18 @@ timeline keyframe. Do not claim that a Picture activates at the beginning,
 middle, or end. A tail frame that does not yet exist belongs to the later
 production loop, not the initial JSON.
 
+For any shot in an established location, read
+[`references/scene-design.md`](references/scene-design.md) and
+[`references/background-continuity.md`](references/background-continuity.md) so
+the room keeps one canonical geography, fixed landmarks, and light direction across
+the cut. For recurring characters, read
+[`references/character-continuity.md`](references/character-continuity.md) so each
+character keeps one canonical reference and view. For any prop or vehicle that
+appears in more than one shot, read
+[`references/prop-continuity.md`](references/prop-continuity.md) so each object
+keeps one exact construction rather than drifting into a different but similarly
+named design.
+
 Present the storyboard for revision and approval before planning assets.
 
 End the draft with: `Approve this storyboard so I can derive the asset plan?`
@@ -257,6 +269,14 @@ After all required assets are approved, assign the references for every shot.
 Every Picture and Audio conditions the whole clip. Picture order is connection
 order, not timeline order. Voice references are for audible performers whose
 identity or delivery needs conditioning; ambience alone does not require Audio.
+
+Keep the cast, the room, and every recurring prop consistent with
+[`references/character-continuity.md`](references/character-continuity.md),
+[`references/background-continuity.md`](references/background-continuity.md), and
+[`references/prop-continuity.md`](references/prop-continuity.md): reuse the same
+actor view per character, the same scene asset per location (varying only the angle
+that matches each shot's camera), and the same prop asset per object. Name each
+prop's exact construction rather than a generic noun.
 
 Show the complete per-shot slot map and obtain approval before JSON.
 

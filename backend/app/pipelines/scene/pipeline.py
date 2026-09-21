@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
 from . import workflow
@@ -96,12 +97,15 @@ class ScenePipeline(Pipeline):
         if not scene:
             raise ValueError("scene reference image is required")
         p = job.params
+        append_text = append_global_prompt(
+            p.get("append_text") or "", effective_global_prompt(job.project_id)
+        )
         prompt, seed, used, stems = workflow.build_scene_prompt(
             scene_image_name=scene,
             scene_name=job.name or "",
             angle_prompts=p.get("angle_prompts") or workflow.DEFAULT_ANGLES,
             prepend_text=p.get("prepend_text") or "",
-            append_text=p.get("append_text") or "",
+            append_text=append_text,
             start_index=int(p.get("start_index") or 0),
             max_rows=p.get("max_rows"),
             seed=job.seed,

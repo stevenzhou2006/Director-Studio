@@ -334,6 +334,70 @@ def test_collect_keeps_two_human_actors_separate(monkeypatch) -> None:
     assert [ref.image_index for ref in packed["source_refs"]] == [None, None, None]
 
 
+def _scene_asset() -> LibraryAsset:
+    return LibraryAsset(
+        id="scn_trike",
+        kind="scenes",
+        name="trike",
+        files={
+            "input_scene": "input_scene.jpeg",
+            "master": "master.jpeg",
+            "三轮车_01_left_side_view_h270_v0": "a.png",
+            "三轮车_04_front_left_view_h315_v0": "b.png",
+        },
+        pipeline_id="scene",
+        job_id="job_scene",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def test_scene_image_demotes_side_view_preferred_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rear/side plate hides the driver area, so the model invents a cab."""
+    from app.agents.director import reference_service as rs
+
+    requested: list[str] = []
+
+    def fake_resolve(asset, *, role=None, file_key=None):
+        requested.append(file_key)
+        if file_key in asset.files:
+            return (f"{file_key}.png", b"data", file_key)
+        return None
+
+    monkeypatch.setattr("app.core.library.images.resolve_asset_image", fake_resolve)
+
+    name, data, used = rs._scene_image_for_ref_frame(
+        _scene_asset(), preferred_key="三轮车_01_left_side_view_h270_v0"
+    )
+
+    assert used == "input_scene"
+    assert requested[0] == "input_scene"
+
+
+def test_scene_image_honors_frontal_preferred_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agents.director import reference_service as rs
+
+    requested: list[str] = []
+
+    def fake_resolve(asset, *, role=None, file_key=None):
+        requested.append(file_key)
+        if file_key in asset.files:
+            return (f"{file_key}.png", b"data", file_key)
+        return None
+
+    monkeypatch.setattr("app.core.library.images.resolve_asset_image", fake_resolve)
+
+    name, data, used = rs._scene_image_for_ref_frame(
+        _scene_asset(), preferred_key="三轮车_04_front_left_view_h315_v0"
+    )
+
+    assert used == "三轮车_04_front_left_view_h315_v0"
+    assert requested[0] == "三轮车_04_front_left_view_h315_v0"
+
+
 def test_actor_image_prefers_quadruped_threeview_over_master(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

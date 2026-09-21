@@ -39,9 +39,11 @@ NODE_LIGHTNING_LORA = "17"
 
 NODE_REF_METHOD = "20"
 NODE_ZERO_NEGATIVE = "21"
+NODE_NEG_METHOD = "22"
 NODE_REF_ENCODE_BASE = 30
 NODE_REF_FIRST_PASS_BASE = 40
 NODE_REF_SECOND_PASS_BASE = 50
+NODE_NEG_REF_BASE = 60
 
 REF_IMAGE_NODES = (NODE_REF_IMAGE_1, NODE_REF_IMAGE_2, NODE_REF_IMAGE_3)
 
@@ -138,11 +140,16 @@ def fill_layout_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
         "model sheet, same person repeated, split screen, contact sheet, "
         "poster on glass, sticker on door, cutout pasted on wall, floating person, "
         "person as reflection only, flat cardboard cutout, billboard on door, "
+        "car body, car door, car interior, steering wheel, windshield, "
+        "glass windshield, glass side window, enclosed cabin, closed cab, "
         "pure black void, studio seamless, product photography, catalog shot, "
         "melted walls, wavy texture, oily artifacts, plastic skin, oversmoothed, "
         "blurry, low quality, soft focus, muddy colors, jpeg artifacts, noise banding, "
         "deformed anatomy, extra limbs, watermark, text overlay, UI, logo"
     )
+    negative_extra = str(job_params.get("negative_extra") or "").strip()
+    if negative_extra:
+        neg = f"{neg}, {negative_extra}"
     if NODE_NEGATIVE in filled:
         filled[NODE_NEGATIVE].setdefault("inputs", {})["prompt"] = neg
         # Negative should not receive reference images (avoids locking sheet layout)
@@ -212,7 +219,6 @@ def fill_layout_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
     sampler_in["model"] = [NODE_LIGHTNING_LORA, 0]
 
     if images:
-        filled.pop(NODE_NEGATIVE, None)
         filled.pop(NODE_EMPTY_LATENT, None)
         filled.pop(NODE_SCENE_ENCODE, None)
 
@@ -254,8 +260,8 @@ def fill_layout_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
             "_meta": {"title": "Qwen 2511 Reference Method"},
         }
 
-        # Negative gets every reference once. The positive quality path repeats
-        # them once more, matching the tested community double-reference graph.
+        # Positive quality path repeats every reference once (community
+        # double-reference graph).
         current = NODE_REF_METHOD
         for i, encode_id in enumerate(encode_ids):
             node_id = str(NODE_REF_FIRST_PASS_BASE + i)
@@ -269,12 +275,6 @@ def fill_layout_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
             }
             current = node_id
 
-        filled[NODE_ZERO_NEGATIVE] = {
-            "class_type": "ConditioningZeroOut",
-            "inputs": {"conditioning": [current, 0]},
-            "_meta": {"title": "Zero Prompt, Preserve Reference Latents"},
-        }
-
         for i, encode_id in enumerate(encode_ids):
             node_id = str(NODE_REF_SECOND_PASS_BASE + i)
             filled[node_id] = {
@@ -287,8 +287,44 @@ def fill_layout_graph(graph: dict[str, Any], job_params: dict[str, Any]) -> dict
             }
             current = node_id
 
+        # Negative MUST carry a real negative prompt (not ConditioningZeroOut) or
+        # prohibitions such as "no glass windshield / enclosed cab" are dropped and
+        # the model adds what the references do not explicitly forbid.
+        neg_inputs: dict[str, Any] = {
+            "clip": [NODE_CLIP, 0],
+            "prompt": neg,
+            "vae": [NODE_VAE, 0],
+        }
+        for i in range(len(images)):
+            neg_inputs[f"image{i + 1}"] = [REF_IMAGE_NODES[i], 0]
+        filled[NODE_NEGATIVE] = {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": neg_inputs,
+            "_meta": {"title": "Negative Layout Encode"},
+        }
+        filled[NODE_NEG_METHOD] = {
+            "class_type": "FluxKontextMultiReferenceLatentMethod",
+            "inputs": {
+                "conditioning": [NODE_NEGATIVE, 0],
+                "reference_latents_method": "index_timestep_zero",
+            },
+            "_meta": {"title": "Qwen 2511 Negative Reference Method"},
+        }
+        current_neg = NODE_NEG_METHOD
+        for i, encode_id in enumerate(encode_ids):
+            node_id = str(NODE_NEG_REF_BASE + i)
+            filled[node_id] = {
+                "class_type": "ReferenceLatent",
+                "inputs": {
+                    "conditioning": [current_neg, 0],
+                    "latent": [encode_id, 0],
+                },
+                "_meta": {"title": f"Negative Reference {i + 1}"},
+            }
+            current_neg = node_id
+
         sampler_in["positive"] = [current, 0]
-        sampler_in["negative"] = [NODE_ZERO_NEGATIVE, 0]
+        sampler_in["negative"] = [current_neg, 0]
         sampler_in["latent_image"] = [encode_ids[0], 0]
         sampler_in["denoise"] = float(
             job_params.get("reference_denoise", EMPTY_LATENT_DENOISE)
@@ -335,6 +371,7 @@ def build_layout_prompt(
     job_id: str | None = None,
     ref_labels: list[str] | None = None,
     aspect_ratio: str | None = None,
+    negative_extra: str = "",
 ) -> tuple[dict[str, Any], int]:
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
     if output_prefix is None and job_id:
@@ -353,6 +390,7 @@ def build_layout_prompt(
             "output_prefix": output_prefix,
             "ref_labels": list(ref_labels or []),
             "aspect_ratio": aspect_ratio,
+            "negative_extra": negative_extra,
         },
     )
     return filled, resolved_seed

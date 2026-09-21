@@ -707,3 +707,127 @@ def test_list_h3_jobs_json_shot_id_survives_limit(client):
     body = filtered.json()
     assert [item["json_shot_id"] for item in body] == [target_shot_id]
     assert body[0]["id"] == target.id
+
+
+def _seed_library_asset(kind: str, asset_id: str, name: str, *, files: dict) -> None:
+    from app.core.schemas import LibraryAsset
+
+    adir = settings.library_root / kind / asset_id
+    adir.mkdir(parents=True, exist_ok=True)
+    for filename in files.values():
+        (adir / filename).write_bytes(b"y" * 5000)
+    asset = LibraryAsset(
+        id=asset_id,
+        kind=kind,
+        name=name,
+        pipeline_id="actor" if kind == "actors" else kind,
+        job_id=f"job_{asset_id}",
+        created_at="2026-01-01T00:00:00+00:00",
+        files=dict(files),
+    )
+    (adir / "asset.json").write_text(
+        asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+
+def test_submit_injects_project_global_prompt(client, capture_pipeline_start):
+    project = _create_project(client, mode="json_production")
+    patched = client.patch(
+        f"/api/projects/{project['id']}",
+        json={"global_prompt": "Always use a soft amber grade."},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["global_prompt"] == "Always use a soft amber grade."
+
+    saved = _put_storyboard(client, project["id"], _one_picture_document())
+    _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "lu.png",
+        PNG_BYTES,
+        "image/png",
+    )
+    response = _submit_shot(
+        client, project["id"], "shot_001", revision=saved["revision"]
+    )
+
+    assert response.status_code == 200, response.text
+    assert "soft amber grade" in capture_pipeline_start["job"].params["prompt"]
+
+
+def test_submit_resolves_linked_library_picture(client, capture_pipeline_start):
+    _seed_library_asset("actors", "act_lu", "Lu", files={"master": "lu_master.png"})
+    project = _create_project(client, mode="json_production")
+    document = _one_picture_document()
+    document["shots"][0]["pictures"][0]["asset_id"] = "act_lu"
+    document["shots"][0]["pictures"][0]["file_key"] = "master"
+    saved = _put_storyboard(client, project["id"], document)
+
+    response = _submit_shot(
+        client, project["id"], "shot_001", revision=saved["revision"]
+    )
+
+    assert response.status_code == 200, response.text
+    assert capture_pipeline_start["images"]["ref_0"] == ("lu_master.png", b"y" * 5000)
+
+
+def test_upload_to_linked_library_slot_is_rejected(client):
+    _seed_library_asset("actors", "act_lu", "Lu", files={"master": "lu_master.png"})
+    project = _create_project(client, mode="json_production")
+    document = _one_picture_document()
+    document["shots"][0]["pictures"][0]["asset_id"] = "act_lu"
+    _put_storyboard(client, project["id"], document)
+
+    response = _stage_asset(
+        client,
+        project["id"],
+        "shot_001",
+        "picture",
+        1,
+        "custom.png",
+        PNG_BYTES,
+        "image/png",
+    )
+    assert response.status_code == 400
+    assert "linked to library asset" in response.text
+
+
+def test_submit_rejects_missing_linked_asset(client, capture_pipeline_start):
+    project = _create_project(client, mode="json_production")
+    document = _one_picture_document()
+    document["shots"][0]["pictures"][0]["asset_id"] = "act_missing"
+    saved = _put_storyboard(client, project["id"], document)
+
+    response = _submit_shot(
+        client, project["id"], "shot_001", revision=saved["revision"]
+    )
+    assert response.status_code == 400, response.text
+    assert "missing library asset" in response.text
+    assert capture_pipeline_start["calls"] == 0
+
+
+def test_submit_resolves_linked_library_audio(client, capture_pipeline_start):
+    _seed_library_asset("actors", "act_lu", "Lu", files={"master": "lu_master.png"})
+    _seed_library_asset(
+        "voices", "voi_lu", "Lu voice", files={"reference": "lu_voice.wav"}
+    )
+    project = _create_project(client, mode="json_production")
+    document = _one_picture_document()
+    shot = document["shots"][0]
+    shot["pictures"][0]["asset_id"] = "act_lu"
+    shot["pictures"][0]["file_key"] = "master"
+    shot["audio"] = [{"index": 1, "label": "Lu voice", "asset_id": "voi_lu"}]
+    shot["prompt"]["subject_definitions"] += " <Audio 1> defines Lu's voice."
+    saved = _put_storyboard(client, project["id"], document)
+
+    response = _submit_shot(
+        client, project["id"], "shot_001", revision=saved["revision"]
+    )
+    assert response.status_code == 200, response.text
+    assert capture_pipeline_start["images"]["ref_audio_0"] == (
+        "lu_voice.wav",
+        b"y" * 5000,
+    )

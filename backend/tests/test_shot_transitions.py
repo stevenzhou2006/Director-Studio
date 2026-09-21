@@ -82,6 +82,46 @@ def test_rejected_layout_cannot_be_selected():
         transitions.select_layout_reference(shot, "lr_after", True)
 
 
+def test_use_layout_reference_makes_exactly_one_active():
+    shot = _shot_with_two_layouts()
+
+    updated = transitions.use_layout_reference(shot, "lr_after")
+
+    assert [layout.selected_for_h3 for layout in updated.layout_refs] == [False, True]
+    assert updated.layout_asset_id == "lay_after"
+    assert [ref.asset_id for ref in updated.refs] == ["lay_after"]
+
+
+def test_use_layout_reference_reactivates_and_deselects_siblings():
+    shot = _shot_with_two_layouts()
+    retired = shot.layout_refs[1].model_copy(
+        update={"superseded_by": "lr_before", "selected_for_h3": False}
+    )
+    shot = shot.model_copy(update={"layout_refs": [shot.layout_refs[0], retired]})
+
+    updated = transitions.use_layout_reference(shot, "lr_after")
+
+    assert updated.layout_refs[1].superseded_by is None
+    assert updated.layout_refs[1].selected_for_h3 is True
+    assert updated.layout_refs[0].selected_for_h3 is False
+    assert [ref.asset_id for ref in updated.refs] == ["lay_after"]
+
+
+def test_use_layout_reference_rejects_ungenerated_and_rejected():
+    shot = _shot_with_two_layouts()
+    ungenerated = shot.layout_refs[1].model_copy(update={"asset_id": None})
+    shot = shot.model_copy(update={"layout_refs": [shot.layout_refs[0], ungenerated]})
+    with pytest.raises(ValueError, match="no generated image"):
+        transitions.use_layout_reference(shot, "lr_after")
+
+    rejected = shot.layout_refs[0].model_copy(
+        update={"review_status": LayoutReviewStatus.reject}
+    )
+    shot = shot.model_copy(update={"layout_refs": [rejected, shot.layout_refs[1]]})
+    with pytest.raises(ValueError, match="rejected Layout cannot be used"):
+        transitions.use_layout_reference(shot, "lr_before")
+
+
 def test_rejected_layout_already_bound_as_picture_fails_h3_preflight():
     shot = Shot(
         id="sht_reject_after_bind",

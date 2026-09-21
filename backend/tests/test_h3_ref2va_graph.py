@@ -29,7 +29,7 @@ from app.workflow_profiles.h3 import (
 VALID_PROMPT = (
     "subject_definitions:\nA\n"
     "summary:\nB\n"
-    "retention_analysis:\nC\n"
+    "retention_analysis:\nC retained from <Picture 1>.\n"
     "detailed_description:\nD\n"
     "overall_soundscape:\nE\n"
     "non_diegetic_music:\nF"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import ComfyImageRef, JobRecord
 from ..base import Pipeline
 from . import workflow
@@ -59,10 +60,14 @@ class PropPipeline(Pipeline):
     ) -> tuple[dict[str, Any], int]:
         image_name = uploaded_images.get("prop") or ""
         p = job.params or {}
+        notes = append_global_prompt(
+            job.notes or str(p.get("notes") or ""),
+            effective_global_prompt(job.project_id),
+        )
         return workflow.build_prop_prompt(
             image_name=image_name,
             name=job.name or str(p.get("name") or ""),
-            notes=job.notes or str(p.get("notes") or ""),
+            notes=notes,
             seed=job.seed,
             output_prefix=p.get("output_prefix"),
             job_id=job.id,

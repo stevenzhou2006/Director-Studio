@@ -513,7 +513,9 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
     project = create_project("Stage guides", "INT. CAFE - DAY\nActor enters.")
     sections_json = json.dumps(
         {
-            "subject_definitions": "S1 is the actor.",
+            "subject_definitions": (
+                "S1 is the actor <Picture 1>; the cafe is <Picture 2>."
+            ),
             "summary": "The actor enters the cafe.",
             "retention_analysis": "Keep the planned blocking.",
             "detailed_description": "A measured entrance across the room.",
@@ -533,8 +535,18 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
     shot = list_shots(project.id)[0]
     await svc.write_prompts_after_layout(shot.id)
 
-    assert provider.calls[0].guides == ("script-planning",)
-    assert provider.calls[-1].guides == ("h3-prompt-writing",)
+    assert provider.calls[0].guides == (
+        "script-planning",
+        "character-continuity",
+        "background-continuity",
+        "prop-continuity",
+    )
+    assert provider.calls[-1].guides == (
+        "h3-prompt-writing",
+        "character-continuity",
+        "background-continuity",
+        "prop-continuity",
+    )
     h3_user = provider.calls[-1].user
     assert f"- shot_type: {CAMERA_DRAFT['shot_type']}" in h3_user
     assert f"- camera_angle: {CAMERA_DRAFT['camera_angle']}" in h3_user
@@ -591,7 +603,13 @@ async def test_visual_direction_loads_reference_guides(monkeypatch):
     )
 
     assert captured == [
-        ("reference-strategy", "reference-frame-generation")
+        (
+            "reference-strategy",
+            "reference-frame-generation",
+            "scene-design",
+            "background-continuity",
+            "prop-continuity",
+        )
     ]
 
 
@@ -2344,7 +2362,8 @@ async def test_write_prompts_after_layout(director_dirs):
     sections_json = json.dumps(
         {
             "subject_definitions": (
-                "S1 is the lead. <Picture 2> controls the spatial layout."
+                "S1 is the lead. <Picture 1> controls Lin Ya's identity and "
+                "wardrobe. <Picture 2> controls the spatial layout."
             ),
             "summary": "A short cafe walk-in.",
             "retention_analysis": "Retain the actor and Layout continuity.",
@@ -2478,6 +2497,120 @@ async def test_write_prompts_visually_analyzes_a_new_layout_once(director_dirs):
 
 
 @pytest.mark.asyncio
+async def test_write_prompts_grounds_actor_wardrobe_with_a_visual_lock(director_dirs):
+    from PIL import Image
+
+    from app.agents.director.service import DirectorService
+    from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
+    from app.core.projects.models import RefRole, ShotRef
+    from app.core.projects.store import save_project
+    from app.core.schemas import LibraryAsset
+
+    project = create_project("Actor lock", "The cat waits.")
+    actor_dir = director_dirs["library"] / "actors" / "act_lock"
+    actor_dir.mkdir(parents=True)
+    Image.effect_noise((512, 512), 24).convert("RGB").save(actor_dir / "master.png")
+    actor_asset = LibraryAsset(
+        id="act_lock",
+        kind="actors",
+        name="fatcat",
+        notes="",
+        pipeline_id="actor",
+        job_id="job_actor",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"master": "master.png"},
+        meta={"species": "human", "description": "the approved lead"},
+    )
+    (actor_dir / "asset.json").write_text(
+        actor_asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+    layout_dir = director_dirs["library"] / "layouts" / "lay_actor_lock"
+    layout_dir.mkdir(parents=True)
+    Image.effect_noise((640, 360), 24).convert("RGB").save(layout_dir / "layout.png")
+    layout_asset = LibraryAsset(
+        id="lay_actor_lock",
+        kind="layouts",
+        name="lock composition",
+        notes="",
+        pipeline_id="ref_frame",
+        job_id="job_layout",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"layout": "layout.png"},
+        meta={"review_status": "usable"},
+    )
+    (layout_dir / "asset.json").write_text(
+        layout_asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    shot = Shot(
+        id="sht_actor_lock",
+        project_id=project.id,
+        scene_id="sc01",
+        title="The wait",
+        script_beat="The cat waits.",
+        duration_s=6,
+        layout_refs=[
+            LayoutReference(
+                id="lref_actor_lock",
+                asset_id=layout_asset.id,
+                purpose="waiting",
+                review_status=LayoutReviewStatus.usable,
+                selected_for_h3=True,
+            )
+        ],
+        refs=[
+            ShotRef(role=RefRole.actor, asset_id=actor_asset.id, picture_index=1, file_key="master")
+        ],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    sections_json = json.dumps(
+        {
+            "subject_definitions": "The lead in <Picture 1> holds the <Picture 2> composition.",
+            "summary": "The cat waits.",
+            "retention_analysis": "Keep both references.",
+            "detailed_description": "From 0-6 seconds, the cat waits.",
+            "overall_soundscape": "Room tone.",
+            "non_diegetic_music": "None.",
+        }
+    )
+
+    class VisionPlanProvider(FakePlanProvider):
+        def __init__(self) -> None:
+            super().__init__(responses=[sections_json, sections_json])
+            self.visual_calls: list[tuple[str, list[str]]] = []
+
+        async def complete_with_images(
+            self,
+            system: str,
+            user: str,
+            *,
+            images: list[str],
+            guides: Iterable[str] = (),
+        ) -> str:
+            self.visual_calls.append((user, images))
+            if "Return the exact appearance" in user:
+                return "Orange tabby with green cap, white tee, gray vest, gold chain."
+            return "Centered medium composition."
+
+    provider = VisionPlanProvider()
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+
+    first = await svc.write_prompts_after_layout(shot.id)
+    second = await svc.write_prompts_after_layout(shot.id)
+
+    assert len(provider.visual_calls) == 2
+    assert first.meta["actor_visual_locks"][actor_asset.id].startswith("Orange tabby")
+    assert "green cap" in provider.calls[0].user
+    # Cached on the second pass; no extra vision calls.
+    assert len(provider.visual_calls) == 2
+    assert second.meta["actor_visual_locks"] == first.meta["actor_visual_locks"]
+
+
+@pytest.mark.asyncio
 async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signature(
     director_dirs,
 ):
@@ -2530,6 +2663,7 @@ async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signa
     response = json.dumps(
         {
             "subject_definitions": (
+                "<Picture 1> controls Chen's identity; "
                 "<Picture 2> controls the empty doorway geography and composition; "
                 "<Picture 3> controls Chen's compatible post-entry blocking."
             ),

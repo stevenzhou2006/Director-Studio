@@ -198,6 +198,9 @@ class Project(BaseModel):
     script_text: str
     script_locked: bool = False
     mode: ProjectMode = ProjectMode.director
+    # Project-wide direction every shot must follow. Empty falls back to the
+    # app-wide ``DS_GLOBAL_PROMPT`` default.
+    global_prompt: str = ""
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)

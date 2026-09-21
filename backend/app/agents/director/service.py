@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,6 +97,17 @@ from .reference_service import (
     _scene_image_for_ref_frame,
     build_ref_frame_brief,
     build_tail_frame_revision_brief,
+)
+from ...core.projects.continuity import (
+    apply_continuity_to_shot,
+    continuity_hint,
+    derive_continuity,
+    load_continuity,
+    save_continuity,
+)
+from ...core.prompting import (
+    effective_global_prompt,
+    global_prompt_block,
 )
 
 logger = logging.getLogger("director_studio.director")
@@ -234,7 +246,7 @@ def recast_shot_assets(
     force: bool = False,
 ) -> Shot:
     """Compatibility wrapper preserving service-level catalog monkeypatches."""
-    return _recast_shot_assets(
+    recast = _recast_shot_assets(
         project_id,
         shot,
         inventory=inventory,
@@ -244,6 +256,11 @@ def recast_shot_assets(
         inventory_loader=_inventory,
         index_loader=_asset_index,
     )
+    continuity = load_continuity(project_id)
+    if continuity is not None:
+        resolved_index = index if index is not None else _asset_index(project_id)
+        recast, _notes = apply_continuity_to_shot(recast, continuity, resolved_index)
+    return recast
 
 
 def _shot_context_summary(shot: Shot) -> dict[str, Any]:
@@ -262,6 +279,16 @@ def _shot_context_summary(shot: Shot) -> dict[str, Any]:
         "blocked_reasons": list(shot.blocked_reasons),
         "dialogue": list(shot.dialogue),
     }
+
+
+def _clean_direction_text(raw: str) -> str:
+    """Strip reasoning blocks and any markdown fence from a free-form reply."""
+    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.I | re.S)
+    text = text.strip()
+    fenced = re.match(r"```(?:\w+)?\s*(.*?)\s*```\s*$", text, flags=re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    return text
 
 
 def _build_context(project: Project, shots: list[Shot], *, phase: str) -> AgentContext:
@@ -632,6 +659,7 @@ class DirectorService:
 
         inventory = _inventory(project_id)
         index = _asset_index(project_id)
+        prior_continuity = load_continuity(project_id)
         _validate_storyboard_bindings(
             validated,
             inventory=inventory,
@@ -667,6 +695,14 @@ class DirectorService:
                 else:
                     candidate = candidate.model_copy(update={"id": existing.id})
             shots.append(candidate)
+        if prior_continuity is not None:
+            pinned: list[Shot] = []
+            for shot in shots:
+                pinned_shot, _notes = apply_continuity_to_shot(
+                    shot, prior_continuity, index
+                )
+                pinned.append(pinned_shot)
+            shots = pinned
         _validate_materialized_storyboard_bindings(
             shots,
             inventory=inventory,
@@ -702,6 +738,7 @@ class DirectorService:
 
         replace_project_shots(project_id, shots)
         _claim_storyboard_assets(project_id, shots, index=index)
+        save_continuity(project_id, derive_continuity(project_id, shots, index))
         persisted = list_shots(project_id)
         refreshed = load_project(project_id) or project
         save_agent_context(
@@ -718,6 +755,19 @@ class DirectorService:
         inventory = _inventory(project_id)
         index = _asset_index(project_id)
         library_json = json.dumps(inventory, indent=2)
+        prior_continuity = load_continuity(project_id)
+        hint = continuity_hint(prior_continuity)
+        global_block = global_prompt_block(effective_global_prompt(project_id))
+        plan_blocks: list[str] = []
+        if hint:
+            plan_blocks.append(
+                f"Continuity locks from the approved plan (keep these bindings):\n{hint}"
+            )
+        if global_block:
+            plan_blocks.append(global_block)
+        feedback_block = (
+            "\n\n".join(plan_blocks) + "\n" if plan_blocks else ""
+        )
 
         # Plan path: queue for GPU, free Comfy image/video weights, then run Ollama.
         # release_comfy_models is also invoked inside llm_session; call once more
@@ -732,12 +782,17 @@ class DirectorService:
             user = prompt_text.PLAN_USER_TEMPLATE.format(
                 script_text=project.script_text,
                 library_json=library_json,
-                feedback_block="",
+                feedback_block=feedback_block,
             )
             raw = await self.plan_provider.complete(
                 system,
                 user,
-                guides=("script-planning",),
+                guides=(
+                    "script-planning",
+                    "character-continuity",
+                    "background-continuity",
+                    "prop-continuity",
+                ),
             )
             drafts: list[ShotDraft] | None = None
             try:
@@ -758,7 +813,12 @@ class DirectorService:
                 raw2 = await self.plan_provider.complete(
                     prompt_text.PLAN_REPAIR_SYSTEM,
                     repair_user,
-                    guides=("script-planning",),
+                    guides=(
+                        "script-planning",
+                        "character-continuity",
+                        "background-continuity",
+                        "prop-continuity",
+                    ),
                 )
                 try:
                     drafts = parse_shot_drafts(raw2)
@@ -817,6 +877,17 @@ class DirectorService:
                         logger.exception("assign voice asset project failed for %s", asset.id)
             shots.append(shot)
 
+        # Pin cross-shot character/location bindings to the prior continuity anchor
+        # so a re-plan cannot drift the cast or the room between shots.
+        if prior_continuity is not None:
+            pinned: list[Shot] = []
+            for shot in shots:
+                pinned_shot, _notes = apply_continuity_to_shot(shot, prior_continuity, index)
+                pinned.append(pinned_shot)
+            shots = pinned
+
+        save_continuity(project_id, derive_continuity(project_id, shots, index))
+
         # New plan fully replaces old shots (delete orphan JSON + rewrite shot_ids)
         deleted = replace_project_shots(project_id, shots)
         if deleted:
@@ -831,6 +902,49 @@ class DirectorService:
         ctx = _build_context(project, shots, phase="planned")
         save_agent_context(project_id, ctx)
         return project
+
+    async def expand_global_direction(
+        self,
+        description: str,
+        *,
+        current: str = "",
+        project_id: str | None = None,
+    ) -> str:
+        """Expand a rough note into a detailed, reusable global direction."""
+        text = (description or "").strip()
+        if not text:
+            raise ValueError("a rough description is required")
+
+        project_name = "General production"
+        if project_id:
+            project = load_project(project_id)
+            if project is None:
+                raise ValueError(f"project not found: {project_id}")
+            project_name = project.name or project_name
+
+        current_block = ""
+        if (current or "").strip():
+            current_block = (
+                "Previously approved direction (refine or extend it and keep its "
+                f"locked details):\n---\n{current.strip()}\n---\n\n"
+            )
+        user = prompt_text.GLOBAL_DIRECTION_USER_TEMPLATE.format(
+            project_name=project_name,
+            description=text,
+            current_block=current_block,
+        )
+        keep = bool(getattr(settings, "llm_keep_loaded", True))
+        async with self.orchestrator.llm_session(release_on_exit=not keep):
+            await self.orchestrator.ensure_llm_ready()
+            raw = await self.plan_provider.complete(
+                prompt_text.GLOBAL_DIRECTION_SYSTEM,
+                user,
+                guides=("global-direction",),
+            )
+        cleaned = _clean_direction_text(raw)
+        if not cleaned:
+            raise ValueError("the model returned an empty global direction")
+        return cleaned
 
     async def queue_ref_frames(
         self,
@@ -1817,13 +1931,22 @@ class DirectorService:
                     f"{appearance_lock}{anatomy}"
                 )
             else:
-                labels.append(
-                    f"Image{image_index} {ref.role.value.upper()} ({name}, {used_key}) — "
-                    "preserve the object's shape, color, and markings only; discard its "
-                    "catalog backdrop and place exactly one according to the shot action"
-                )
                 if ref.role == RefRole.prop:
+                    labels.append(
+                        f"Image{image_index} PROP ({name}, {used_key}) — authoritative "
+                        "design: reproduce this exact object unchanged, including its "
+                        "silhouette and proportions, mechanism or control type, number "
+                        "and arrangement of parts, color, material, and markings; never "
+                        "substitute or upgrade the mechanism; discard its catalog "
+                        "backdrop and place exactly one according to the shot action"
+                    )
                     sent_prop_ids.add(ref.asset_id)
+                else:
+                    labels.append(
+                        f"Image{image_index} {ref.role.value.upper()} ({name}, {used_key}) — "
+                        "preserve the object's shape, color, and markings only; discard its "
+                        "catalog backdrop and place exactly one according to the shot action"
+                    )
 
         if skipped:
             labels.append(
@@ -1836,9 +1959,20 @@ class DirectorService:
                 continue
             pa = load_asset("props", r.asset_id)
             name = pa.name if pa and pa.name else r.asset_id
+            approved = ""
+            if pa is not None:
+                approved = str(
+                    (pa.meta or {}).get("description") or pa.notes or ""
+                ).strip()
+            approved_block = (
+                f" Approved design (do not change): {approved}." if approved else ""
+            )
             labels.append(
-                f"PROP text only (image slot unavailable): {name} — "
-                f"appear naturally in-hand if the beat needs it; not product photography"
+                f"PROP text only (image slot unavailable): {name}.{approved_block} "
+                "Reproduce this exact construction (silhouette, mechanism or control "
+                "type, number and arrangement of parts, and colors); never invent a "
+                "different design; appear naturally in the scene if the beat needs it, "
+                "not product photography"
             )
 
         logger.info(
@@ -1922,6 +2056,55 @@ class DirectorService:
                     layout_visual_analyses[asset_id] = {"analysis": cleaned}
         meta["layout_visual_analyses"] = layout_visual_analyses
 
+        # Inspect each actor's own reference so wardrobe/identity is grounded in
+        # pixels for THIS shot, not just a possibly generic catalog description.
+        # The Layout analysis deliberately excludes appearance; this pass fills
+        # that gap with a checkable identity/wardrobe lock.
+        actor_visual_locks = dict(meta.get("actor_visual_locks") or {})
+        if callable(complete_with_images):
+            from .vision import image_bytes_to_b64_jpeg as _encode_actor_image
+
+            for ref in sorted(shot.refs, key=lambda item: item.picture_index):
+                if ref.role != RefRole.actor:
+                    continue
+                asset_id = str(ref.asset_id or "")
+                if not asset_id or asset_id in actor_visual_locks:
+                    continue
+                kind = role_to_library_kind(ref.role.value)
+                asset = load_asset(kind, asset_id) if kind else None
+                if asset is None:
+                    continue
+                pair = _read_asset_image_bytes(
+                    asset, role="actor", file_key=ref.file_key
+                )
+                encoded = _encode_actor_image(pair[1]) if pair else None
+                if not encoded:
+                    continue
+                lock = await complete_with_images(
+                    (
+                        "Inspect one approved character reference image for a video "
+                        "prompt. Transcribe only what is visibly present: face and "
+                        "species identity, hair or fur color and markings, body build, "
+                        "and every worn garment, accessory, and its color and "
+                        "placement, or state that the subject has a natural coat and is "
+                        "unclothed. Never invent, upgrade, or infer details that are not "
+                        "visible. Ignore background, props, camera, and lighting. Return "
+                        "one compact paragraph of checkable appearance and wardrobe facts."
+                    ),
+                    (
+                        f"Character: {asset.name}\n"
+                        f"Shot: {shot.title}\n"
+                        "Return the exact appearance and wardrobe this character must "
+                        "keep for the shot."
+                    ),
+                    images=[encoded],
+                    guides=("character-continuity",),
+                )
+                cleaned = str(lock or "").strip()
+                if cleaned:
+                    actor_visual_locks[asset_id] = cleaned
+        meta["actor_visual_locks"] = actor_visual_locks
+
         prompt_refs: list[dict[str, Any]] = []
         for ref in sorted(shot.refs, key=lambda item: item.picture_index):
             kind = role_to_library_kind(ref.role.value)
@@ -1947,6 +2130,9 @@ class DirectorService:
                     "approved_notes": asset.notes if asset else "",
                     "approved_description": approved_description,
                     "species": species,
+                    "visual_lock": str(
+                        actor_visual_locks.get(str(ref.asset_id)) or ""
+                    ),
                     "visual_analysis": str(
                         (
                             layout_visual_analyses.get(ref.asset_id) or {}
@@ -2006,11 +2192,19 @@ class DirectorService:
                 layout_asset_id=selected_layout_asset_id,
                 feedback=shot.feedback or "",
                 context_json=context_json,
+                global_prompt_block=global_prompt_block(
+                    effective_global_prompt(shot.project_id)
+                ),
             )
             raw = await self.plan_provider.complete(
                 prompt_text.H3_PROMPT_INSTRUCTIONS,
                 user,
-                guides=("h3-prompt-writing",),
+                guides=(
+                    "h3-prompt-writing",
+                    "character-continuity",
+                    "background-continuity",
+                    "prop-continuity",
+                ),
             )
             required_layout_indices = [
                 int(item["picture_index"]) for item in selected_layouts
@@ -2027,6 +2221,7 @@ class DirectorService:
                     submitted_picture_indices=(
                         ref.picture_index for ref in shot.refs
                     ),
+                    require_all_submitted=True,
                 )
                 return parsed
 
@@ -2041,7 +2236,12 @@ class DirectorService:
                 raw2 = await self.plan_provider.complete(
                     prompt_text.H3_PROMPT_INSTRUCTIONS,
                     repair,
-                    guides=("h3-prompt-writing",),
+                    guides=(
+                        "h3-prompt-writing",
+                        "character-continuity",
+                        "background-continuity",
+                        "prop-continuity",
+                    ),
                 )
                 prompt_sections = parse_and_validate(raw2)
 

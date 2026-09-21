@@ -250,6 +250,85 @@ def test_create_and_list_projects(client):
     assert "shots" in got.json()
 
 
+def _install_fake_complete(client, response_text: str):
+    provider = client.app.state.plan_provider
+    seen: dict = {}
+
+    async def fake_complete(system, user, *, guides=()):
+        seen["guides"] = tuple(guides)
+        seen["user"] = user
+        return response_text
+
+    provider.complete = fake_complete  # type: ignore[assignment]
+    return seen
+
+
+def test_expand_global_direction_uses_director_llm(client):
+    project = create_project("Expand", "script")
+    seen = _install_fake_complete(client, "```\nDetailed direction text.\n```")
+
+    response = client.post(
+        f"/api/projects/{project.id}/global-prompt/expand",
+        json={"description": "一个简单的场景想法"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["detail"] == "Detailed direction text."
+    assert seen["guides"] == ("global-direction",)
+    assert "一个简单的场景想法" in seen["user"]
+
+
+def test_app_global_direction_round_trips(client):
+    assert client.get("/api/global-direction").json() == {
+        "detail": "",
+        "negative": "",
+    }
+
+    saved = client.put(
+        "/api/global-direction",
+        json={
+            "detail": "  Soft amber grade, no on-screen text.  ",
+            "negative": "  glass windshield, enclosed cab  ",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {
+        "detail": "Soft amber grade, no on-screen text.",
+        "negative": "glass windshield, enclosed cab",
+    }
+    assert client.get("/api/global-direction").json() == {
+        "detail": "Soft amber grade, no on-screen text.",
+        "negative": "glass windshield, enclosed cab",
+    }
+
+
+def test_expand_app_global_direction_uses_director_llm(client):
+    seen = _install_fake_complete(client, "Expanded app-wide direction.")
+
+    response = client.post(
+        "/api/global-direction/expand",
+        json={"description": "通用的整体风格"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["detail"] == "Expanded app-wide direction."
+    assert "General production" in seen["user"]
+
+
+def test_expand_global_direction_rejects_blank_description(client):
+    response = client.post(
+        "/api/global-direction/expand",
+        json={"description": ""},
+    )
+    assert response.status_code == 422
+
+    whitespace = client.post(
+        "/api/global-direction/expand",
+        json={"description": "   "},
+    )
+    assert whitespace.status_code == 400
+
+
 @pytest.mark.parametrize("path_suffix", ["/chat", "/chat/stream"])
 def test_generation_lock_rejects_text_chat_before_history_write(
     client,
@@ -1440,6 +1519,7 @@ async def test_inserted_approved_layout_survives_prompt_write_and_h3_submit(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
+                    "<Picture 1> controls Chen's identity. "
                     "<Picture 2> controls the inserted doorway composition."
                 ),
                 "summary": "One continuous doorway scene.",
@@ -2000,7 +2080,8 @@ def test_approve_shot_and_submit_h3(client, api_env, monkeypatch):
         ],
         prompt_sections=PromptSections(
             subject_definitions=(
-                "subject; <Picture 2> controls the shot composition"
+                "<Picture 1> controls the shot composition; "
+                "<Picture 2> controls the actor identity"
             ),
             summary="summary",
             retention_analysis="retention",
@@ -2234,7 +2315,12 @@ def test_submit_refreshes_prompt_when_layout_provenance_is_stale(
     ) -> str:
         import json
 
-        assert tuple(guides) == ("h3-prompt-writing",)
+        assert tuple(guides) == (
+            "h3-prompt-writing",
+            "character-continuity",
+            "background-continuity",
+            "prop-continuity",
+        )
         return json.dumps(fresh_sections)
 
     monkeypatch.setattr(provider, "complete", return_fresh_sections)
@@ -2386,6 +2472,7 @@ def test_submit_syncs_explicit_multi_layout_set_and_refreshes_stale_signature(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
+                    "<Picture 1> controls Chen's identity; "
                     "<Picture 2> controls empty-doorway geography; "
                     "<Picture 3> controls the compatible two-person blocking."
                 ),
@@ -2483,7 +2570,7 @@ def test_submit_uses_existing_layout_even_when_legacy_selection_is_false(
         return __import__("json").dumps(
             {
                 "subject_definitions": (
-                    "Chen's identity remains stable. "
+                    "<Picture 1> controls Chen's identity. "
                     "<Picture 2> controls the composition."
                 ),
                 "summary": "Chen remains alone in one continuous shot.",
@@ -2606,7 +2693,10 @@ async def test_legacy_deselect_removes_the_current_layout_from_h3(
     ) -> str:
         provider.calls.append((system, user))
         has_layout = '\"role\": \"layout_ref_frame\"' in user
-        subject = "Chen, the room, and recorder remain coherent."
+        subject = (
+            "Chen <Picture 1>, the room <Picture 2>, and the recorder "
+            "<Picture 3> remain coherent."
+        )
         if has_layout:
             subject += " <Picture 4> controls the room composition."
         return __import__("json").dumps(

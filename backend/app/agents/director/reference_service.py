@@ -293,8 +293,14 @@ def _scene_image_for_ref_frame(
         )
 
     ordered_keys: list[str] = []
+    # A rear/side/bird's-eye plate hides the vehicle's driver area and front, so
+    # the layout model invents a cab, windows, and a steering wheel to fill the
+    # gap. Honor an explicit preferred_key only when it is a usable layout angle;
+    # otherwise let the clean full plate win (the bad key still falls through to
+    # the last-resort bucket below).
+    if preferred_key and not _is_bad_layout_angle(preferred_key):
+        ordered_keys.append(preferred_key)
     for key in (
-        preferred_key,
         "input_scene",  # clean full plate — best for layout quality
         "master",
         "plate",
@@ -335,34 +341,60 @@ def _actor_image_for_ref_frame(
     preferred_key: str | None = None,
 ) -> tuple[str, bytes, str] | None:
     """
-    Identity still for layout reference-frame — prefer single portrait over three-view sheets.
+    Identity still for layout reference-frame.
 
-    Qwen Image Edit Plus often copies multi-panel turnaround structure into the output
-    when fullbody_threeview is fed as a ref (reference pollution). For reference-frame we:
-    1) try master / non-sheet keys
-    2) else crop the front panel from a three-view sheet
-    3) last resort: full sheet (prompt must fight layout copy)
+    Priority:
+    1) ``bust_threeview`` front panel — the chest-up view keeps hats, headwear,
+       and facial identity that a small full-body panel loses.
+    2) Quadrupeds: the full-body sheet front panel, because a quadruped's single
+       ``master`` can be an anthropomorphic upright render while the sheet carries
+       the true on-all-fours anatomy.
+    3) An explicit non-sheet key, then ``master``/portrait.
+    4) Remaining three-view sheets, front-panel cropped.
+
+    Qwen Image Edit Plus copies multi-panel turnaround structure into the output,
+    so sheets are always reduced to their front panel.
     """
     from ...core.library.images import resolve_asset_image
     from ...pipelines.actor.workflow import SPECIES_QUADRUPED, actor_prompt_identity
 
     _, species = actor_prompt_identity(asset.meta or {})
+    files = dict(asset.files or {})
+
+    def _sheet_front_crop(
+        name: str, data: bytes, used: str, *, force: bool
+    ) -> tuple[str, bytes, str] | None:
+        cropped = _crop_sheet_front_panel(data, force=force)
+        if cropped:
+            return cropped[0], cropped[1], f"{used}->front_crop"
+        return None
+
+    # An explicit key only counts when the asset actually declares it: the
+    # resolver otherwise falls back to any on-disk image, which would force-crop
+    # a plain portrait as if it were a turnaround sheet.
+    def _declared(key: str) -> bool:
+        return bool(files.get(key))
+
+    # 1) Face / headwear view: keep hats and facial identity for the Layout.
+    if _declared("bust_threeview"):
+        hit = resolve_asset_image(asset, role="actor", file_key="bust_threeview")
+        if hit:
+            name, data, used = hit
+            return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
+
     if species == SPECIES_QUADRUPED and preferred_key != "input_actor":
-        # A quadruped's single "master" can be an anthropomorphic upright render
-        # (human casting boilerplate leaked into the master prompt), while the
-        # turnaround sheet carries the true on-all-fours anatomy. Prefer the
-        # sheet's front panel so Layouts are conditioned on the real animal.
-        for key in ("fullbody_threeview", "asset_sheet", "bust_threeview"):
+        # 2) A quadruped's master can be an anthropomorphic upright render; prefer
+        # the turnaround sheet's front panel so Layouts use the real animal.
+        for key in ("fullbody_threeview", "asset_sheet"):
+            if not _declared(key):
+                continue
             hit = resolve_asset_image(asset, role="actor", file_key=key)
             if not hit:
                 continue
             name, data, used = hit
-            cropped = _crop_sheet_front_panel(data, force=True)
-            if cropped:
-                return cropped[0], cropped[1], f"{used}->front_crop"
-            return name, data, used
+            return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
 
-    # Explicit non-sheet keys first
+    # 3) Explicit non-sheet keys first
     for key in (
         preferred_key,
         "master",
@@ -370,27 +402,27 @@ def _actor_image_for_ref_frame(
         "hero",
         "input_actor",
     ):
-        if not key:
+        if not key or not _declared(key):
             continue
         hit = resolve_asset_image(asset, role="actor", file_key=key)
         if hit:
             name, data, used = hit
             # If someone stored a sheet under master, still try crop
-            cropped = _crop_sheet_front_panel(data)
-            if cropped and used in ("fullbody_threeview", "bust_threeview", "asset_sheet"):
-                return cropped[0], cropped[1], f"{used}->front_crop"
+            if used in ("fullbody_threeview", "bust_threeview", "asset_sheet"):
+                cropped = _sheet_front_crop(name, data, used, force=False)
+                if cropped:
+                    return cropped
             return name, data, used
 
-    # Sheet keys: always try front-panel crop (force — aspect may be only ~1.5)
+    # 4) Sheet keys: always try front-panel crop (force — aspect may be only ~1.5)
     for key in ("fullbody_threeview", "bust_threeview", "asset_sheet"):
+        if not _declared(key):
+            continue
         hit = resolve_asset_image(asset, role="actor", file_key=key)
         if not hit:
             continue
         name, data, used = hit
-        cropped = _crop_sheet_front_panel(data, force=True)
-        if cropped:
-            return cropped[0], cropped[1], f"{used}->front_crop"
-        return name, data, used
+        return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
 
     hit = resolve_asset_image(asset, role="actor")
     if not hit:
@@ -399,7 +431,7 @@ def _actor_image_for_ref_frame(
     if used in ("fullbody_threeview", "bust_threeview", "asset_sheet") or "three" in (
         used or ""
     ):
-        cropped = _crop_sheet_front_panel(data, force=True)
+        cropped = _sheet_front_crop(name, data, used, force=True)
         if cropped:
-            return cropped[0], cropped[1], f"{used}->front_crop"
+            return cropped
     return name, data, used

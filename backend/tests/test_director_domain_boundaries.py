@@ -93,6 +93,44 @@ def test_casting_service_materializes_explicit_actor_and_scene_bindings():
     ]
 
 
+def test_recast_shot_assets_accepts_legacy_shot_without_camera_fields():
+    from app.agents.director import casting_service
+
+    actor = _asset(
+        kind="actors",
+        files={"fullbody_threeview": "actor.png"},
+        asset_id="actor-1",
+    )
+    scene = _asset(
+        kind="scenes",
+        files={"angle_00": "scene.png"},
+        asset_id="scene-1",
+    )
+    inventory = [
+        {"id": actor.id, "kind": actor.kind, "h3_ready": None},
+        {"id": scene.id, "kind": scene.kind, "h3_ready": None},
+    ]
+    shot = Shot(
+        id="sht_recast",
+        project_id="project-1",
+        scene_id="sc01",
+        title="Hold",
+        script_beat="",
+        duration_s=5.0,
+    )
+    assert shot.shot_type == ""
+
+    updated = casting_service.recast_shot_assets(
+        "project-1",
+        shot,
+        inventory=inventory,
+        index={actor.id: actor, scene.id: scene},
+        force=True,
+    )
+
+    assert {ref.role for ref in updated.refs} == {RefRole.actor, RefRole.scene}
+
+
 def test_reference_service_owns_brief_builders_with_facade_compatibility():
     from app.agents.director import reference_service
 

@@ -9,6 +9,7 @@ import { fetchHealth } from "../shared/api/client";
 import { ProjectProvider, useProject } from "../shared/project/ProjectContext";
 import { ProjectPicker } from "../shared/project/ProjectPicker";
 import { DirectorStudioMark } from "../shared/components/DirectorStudioMark";
+import { GlobalPromptPanel } from "../shared/components/GlobalPromptPanel";
 import { NAV_ITEMS, type DesktopPage } from "./navigation";
 import { WorkflowSettingsPage } from "../features/settings/WorkflowSettingsPage";
 import type { Shot } from "../shared/api/types";
@@ -117,6 +118,7 @@ function AppShell() {
   const settingsReturnPage = useRef<Exclude<DesktopPage, "settings">>("director");
   const [directorRequest, setDirectorRequest] = useState<DirectorChatRequest | null>(null);
   const [jsonProductionToolbarTarget, setJsonProductionToolbarTarget] = useState<HTMLDivElement | null>(null);
+  const [directionOpen, setDirectionOpen] = useState(false);
   const requestSequence = useRef(0);
   const [health, setHealth] = useState<{
     comfy_reachable: boolean;
@@ -194,9 +196,30 @@ function AppShell() {
             <span className="dot" />
             <span className="health-label">ComfyUI</span>
           </div>
+          <button type="button" className="btn secondary topbar-settings" onClick={() => setDirectionOpen(true)}>Global direction</button>
           <button type="button" className="btn secondary topbar-settings" aria-current={activePage === "settings" ? "page" : undefined} onClick={openSettings}>Settings</button>
         </div>
       </header>
+
+      {directionOpen ? (
+        <div
+          className="folder-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Global direction"
+          onClick={() => setDirectionOpen(false)}
+        >
+          <div className="folder-modal-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="folder-modal-head">
+              <h2 className="folder-modal-title">Global direction</h2>
+              <button type="button" className="btn secondary sm" onClick={() => setDirectionOpen(false)}>
+                Close
+              </button>
+            </div>
+            <GlobalPromptPanel />
+          </div>
+        </div>
+      ) : null}
 
       {/* Keep pages mounted so in-flight job UI/polling survives tab switches */}
       {settingsVisited ? <div className={activePage === "settings" ? "page-pane active" : "page-pane"} hidden={activePage !== "settings"}><WorkflowSettingsPage active={activePage === "settings"} onClose={closeSettings} /></div> : null}

@@ -122,7 +122,10 @@ downstream work.
 Produce final JSON only when I explicitly request it after slot-map approval.
 Before export, consult the Project Sources named `production-json-contract.md` and
 `h3-ref2va-contract.md`. For asset planning, generation, Layouts, and QC, consult
-`visual-assets.md`. Treat those files as authoritative. Validation must compare
+`visual-assets.md`. For room/scene design and background persistence, consult
+`scene-design.md` and `background-continuity.md`. For character persistence across
+shots, consult `character-continuity.md`. For prop and vehicle persistence, consult
+`prop-continuity.md`. Treat those files as authoritative. Validation must compare
 the JSON with the approved storyboard baseline, including its exact shot count and
 ordered Shot IDs; schema validity alone is not sufficient. Return only the valid
 JSON object, without a Markdown fence or surrounding explanation.

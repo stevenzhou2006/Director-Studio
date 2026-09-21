@@ -66,6 +66,20 @@ describe("parseStoryboardJson", () => {
     expect(() => parseStoryboardJson("{not-json")).toThrow(/malformed|JSON/i);
   });
 
+  it("keeps optional library asset links on slots", () => {
+    const linked = structuredClone(VALID_DOCUMENT);
+    linked.shots[0].pictures[0] = {
+      ...linked.shots[0].pictures[0],
+      asset_id: "act_lu",
+      file_key: "master",
+    };
+    const parsed = parseStoryboardJson(JSON.stringify(linked));
+    expect(parsed.shots[0].pictures[0]).toMatchObject({
+      asset_id: "act_lu",
+      file_key: "master",
+    });
+  });
+
   it("rejects duplicate shot ids", () => {
     const dup = structuredClone(VALID_DOCUMENT);
     dup.shots.push({
@@ -155,6 +169,30 @@ describe("validateShotReadiness", () => {
         audio: new Map(),
       }),
     ).toEqual([]);
+  });
+
+  it("does not require a file for a library-linked slot", () => {
+    const shot = cloneShot({
+      pictures: [
+        {
+          index: 1,
+          role: "actor",
+          label: "Lu identity and wardrobe",
+          asset_id: "act_lu",
+          file_key: "master",
+        },
+        {
+          index: 2,
+          role: "layout",
+          label: "Post-entry blocking and corridor geography",
+        },
+      ],
+    });
+    const errors = validateShotReadiness(shot, {
+      pictures: new Map([[2, layoutFile]]),
+      audio: new Map(),
+    });
+    expect(errors).toEqual([]);
   });
 
   it("reports missing Picture tags in the prompt", () => {

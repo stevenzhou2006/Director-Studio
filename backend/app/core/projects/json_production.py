@@ -38,11 +38,17 @@ class JsonProductionPicture(BaseModel):
     index: int = Field(ge=1, le=9)
     role: JsonPictureRole
     label: str = Field(min_length=1)
+    # Optional link to a real Director Studio library asset. When set, the slot is
+    # library-linked and its bytes come from that asset instead of a manual upload.
+    asset_id: str | None = None
+    file_key: str | None = None
 
 
 class JsonProductionAudio(BaseModel):
     index: int = Field(ge=1, le=3)
     label: str = Field(min_length=1)
+    asset_id: str | None = None
+    file_key: str | None = None
 
 
 class JsonProductionShot(BaseModel):
@@ -140,16 +146,26 @@ def _slot_definition(
     if kind == "picture":
         for slot in shot.pictures:
             if slot.index == index:
-                return {
+                definition: dict[str, object] = {
                     "kind": kind,
                     "index": index,
                     "role": slot.role.value,
                     "label": slot.label,
                 }
+                if slot.asset_id:
+                    definition["asset_id"] = slot.asset_id
+                if slot.file_key:
+                    definition["file_key"] = slot.file_key
+                return definition
     else:
         for slot in shot.audio:
             if slot.index == index:
-                return {"kind": kind, "index": index, "label": slot.label}
+                definition = {"kind": kind, "index": index, "label": slot.label}
+                if slot.asset_id:
+                    definition["asset_id"] = slot.asset_id
+                if slot.file_key:
+                    definition["file_key"] = slot.file_key
+                return definition
     return None
 
 

@@ -40,6 +40,10 @@ To use ordinary Chat rather than Work/Codex, create a ChatGPT Project and paste
 Instructions. Add these files as Project Sources:
 
 - `skills/director-studio-filmmaker/references/visual-assets.md`
+- `skills/director-studio-filmmaker/references/scene-design.md`
+- `skills/director-studio-filmmaker/references/background-continuity.md`
+- `skills/director-studio-filmmaker/references/character-continuity.md`
+- `skills/director-studio-filmmaker/references/prop-continuity.md`
 - `skills/director-studio-filmmaker/references/production-json-contract.md`
 - `skills/director-studio-filmmaker/references/h3-ref2va-contract.md`
 

@@ -4,12 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Shot } from "../../shared/api/types";
 import { LayoutReferenceList } from "./LayoutReferenceList";
-import { removeLayoutReference } from "./api";
+import { removeLayoutReference, useLayout } from "./api";
 
 vi.mock("./api", () => ({
   queueLayout: vi.fn(),
   reviewLayout: vi.fn(),
   selectLayout: vi.fn(),
+  useLayout: vi.fn(),
   removeLayoutReference: vi.fn(),
 }));
 
@@ -208,6 +209,17 @@ describe("LayoutReferenceList", () => {
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
+  it("marks the in-use Layout as Current and alternatives as not used", () => {
+    const { container } = renderList(baseShot);
+
+    expect(screen.getByText("Current")).toBeTruthy();
+    expect(screen.getAllByText("in use").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("not used").length).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll("article.layout-reference-card.is-current"),
+    ).toHaveLength(1);
+  });
+
   it("uses the synchronized Shot ref for the Picture badge", () => {
     renderList(baseShot);
 
@@ -262,6 +274,26 @@ describe("LayoutReferenceList", () => {
     expect(screen.queryByLabelText("Purpose")).toBeNull();
     expect(screen.queryByLabelText("Time hint")).toBeNull();
     expect(screen.queryByRole("button", { name: "Queue reference frame" })).toBeNull();
+  });
+
+  it("uses a chosen Layout for the prompt and H3 run", async () => {
+    const updated: Shot = {
+      ...baseShot,
+      layout_refs: baseShot.layout_refs!.map((layout) => ({
+        ...layout,
+        selected_for_h3: layout.id === "lr_after",
+      })),
+    };
+    vi.mocked(useLayout).mockResolvedValueOnce(updated);
+    const onShotUpdated = vi.fn();
+    renderList(baseShot, vi.fn(), onShotUpdated);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Use post-entry blocking for H3" }),
+    );
+
+    expect(vi.mocked(useLayout)).toHaveBeenCalledWith("sht_layouts", "lr_after");
+    await waitFor(() => expect(onShotUpdated).toHaveBeenCalledWith(updated));
   });
 
   it("removes an unwanted reference frame and propagates the updated shot", async () => {

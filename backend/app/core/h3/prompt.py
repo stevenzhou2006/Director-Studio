@@ -80,6 +80,7 @@ def validate_required_picture_bindings(
     required_indices: Iterable[int],
     *,
     submitted_picture_indices: Iterable[int] | None = None,
+    require_all_submitted: bool = False,
 ) -> None:
     found_indices = [
         int(value)
@@ -97,6 +98,13 @@ def validate_required_picture_bindings(
         tag = f"<Picture {index}>"
         if index not in found_indices:
             raise ValueError(f"missing selected Layout binding: {tag}")
+    if require_all_submitted and submitted_picture_indices is not None:
+        missing = sorted(submitted - set(found_indices))
+        if missing:
+            tags = ", ".join(f"<Picture {index}>" for index in missing)
+            raise ValueError(
+                f"prompt must bind every submitted Picture reference: missing {tags}"
+            )
 
 
 def compose_h3_prompt(sections: PromptSections) -> str:
@@ -115,6 +123,7 @@ def validate_h3_prompt(
     audio_count: int = 0,
     required_picture_indices: Iterable[int] = (),
     submitted_picture_indices: Iterable[int] | None = None,
+    require_all_submitted: bool = False,
 ) -> None:
     """Validate section order, non-empty bodies, and exact dialogue occurrence.
 
@@ -187,4 +196,5 @@ def validate_h3_prompt(
         prompt,
         required_picture_indices,
         submitted_picture_indices=submitted_picture_indices,
+        require_all_submitted=require_all_submitted,
     )

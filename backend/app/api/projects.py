@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from ..agents.director import DirectorService
 from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
 from ..agents.director.planner import role_to_library_kind
+from ..agents.director.reference_service import _actor_image_for_ref_frame
 from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
 from ..core.h3 import (
@@ -46,6 +47,13 @@ from ..core.library.store import (
 )
 from ..core.media.clip_generations import ClipGenerationError
 from ..core.media.concat import concatenate_project_shots
+from ..core.prompting import (
+    effective_global_prompt,
+    ensure_global_prompt_in_h3,
+    load_app_global_negative,
+    load_app_global_prompt,
+    save_app_global_direction,
+)
 from ..core.projects.models import (
     Project,
     ProjectMode,
@@ -93,6 +101,7 @@ from ..core.projects.transitions import (
     assert_h3_submittable,
     review_layout_reference,
     select_layout_reference,
+    use_layout_reference,
 )
 from ..core.schemas import JobStatus, LibraryAsset
 from ..core.llm import (
@@ -179,6 +188,17 @@ class UpdateProjectBody(BaseModel):
     name: str | None = None
     script_text: str | None = None
     script_locked: bool | None = None
+    global_prompt: str | None = None
+
+
+class ExpandGlobalDirectionBody(BaseModel):
+    description: str = Field(min_length=1)
+    current: str | None = None
+
+
+class GlobalDirectionBody(BaseModel):
+    detail: str = ""
+    negative: str | None = None
 
 
 class ChatHistoryItem(BaseModel):
@@ -477,11 +497,19 @@ def _collect_h3_images(shot: Shot) -> dict[str, tuple[str, bytes]]:
             raise ValueError(
                 f"missing library asset for ref picture {ref.picture_index}: {ref.asset_id}"
             )
-        pair = _read_asset_image_bytes(
-            asset,
-            role=ref.role.value,
-            file_key=ref.file_key,
-        )
+        if ref.role == RefRole.actor:
+            # Reuse the Layout actor selection: prefer the hat/facial-identity
+            # still and crop multi-panel turnaround sheets to their front panel,
+            # so H3 is never conditioned on a raw contact sheet (the model would
+            # otherwise copy the panel grid into the video).
+            actor_hit = _actor_image_for_ref_frame(asset, preferred_key=ref.file_key)
+            pair = (actor_hit[0], actor_hit[1]) if actor_hit else None
+        else:
+            pair = _read_asset_image_bytes(
+                asset,
+                role=ref.role.value,
+                file_key=ref.file_key,
+            )
         if not pair:
             raise ValueError(
                 f"no image file for ref picture {ref.picture_index}: {ref.asset_id}"
@@ -549,11 +577,70 @@ async def update_project_endpoint(
         updates["script_text"] = body.script_text
     if body.script_locked is not None:
         updates["script_locked"] = body.script_locked
+    if body.global_prompt is not None:
+        updates["global_prompt"] = body.global_prompt.strip()
     if not updates:
         return project
     project = project.model_copy(update=updates)
     save_project(project)
     return project
+
+
+@router.post("/projects/{project_id}/global-prompt/expand")
+async def expand_global_direction_endpoint(
+    project_id: str,
+    body: ExpandGlobalDirectionBody,
+    svc: DirectorService = Depends(get_director_service),
+) -> dict[str, str]:
+    """Expand a rough note into a detailed direction for one project."""
+    if load_project(project_id) is None:
+        raise HTTPException(404, "Project not found")
+    return {"detail": await _expand_direction(svc, body, project_id=project_id)}
+
+
+@router.get("/global-direction")
+async def get_app_global_direction() -> dict[str, str]:
+    """Read the app-wide global direction applied to every project."""
+    return {
+        "detail": load_app_global_prompt(),
+        "negative": load_app_global_negative(),
+    }
+
+
+@router.put("/global-direction")
+async def put_app_global_direction(body: GlobalDirectionBody) -> dict[str, str]:
+    """Persist the app-wide global direction applied to every project."""
+    return save_app_global_direction(detail=body.detail, negative=body.negative)
+
+
+@router.post("/global-direction/expand")
+async def expand_app_global_direction(
+    body: ExpandGlobalDirectionBody,
+    svc: DirectorService = Depends(get_director_service),
+) -> dict[str, str]:
+    """Expand a rough note into a detailed, reusable app-wide direction."""
+    return {"detail": await _expand_direction(svc, body)}
+
+
+async def _expand_direction(
+    svc: DirectorService,
+    body: ExpandGlobalDirectionBody,
+    *,
+    project_id: str | None = None,
+) -> str:
+    try:
+        return await svc.expand_global_direction(
+            body.description,
+            current=body.current or "",
+            project_id=project_id,
+        )
+    except ValueError as e:
+        raise _http_value_error(e) from e
+    except Exception as e:
+        logger.exception("global direction expansion failed")
+        raise HTTPException(
+            503, f"Global direction expansion failed: {e}"
+        ) from e
 
 
 @router.post("/projects/{project_id}/plan", response_model=ProjectDetailResponse)
@@ -1401,6 +1488,24 @@ async def select_layout_reference_endpoint(
     return updated
 
 
+@router.post(
+    "/shots/{shot_id}/layouts/{layout_ref_id}/use",
+    response_model=Shot,
+)
+async def use_layout_reference_endpoint(
+    shot_id: str,
+    layout_ref_id: str,
+) -> Shot:
+    """Make one Layout the active composition for the prompt and H3 run."""
+    shot = _find_shot(shot_id)
+    try:
+        updated = use_layout_reference(shot, layout_ref_id)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    save_shot(updated)
+    return updated
+
+
 @router.post("/shots/{shot_id}/layout/insert", response_model=Shot)
 async def insert_layout_ref_frame(
     shot_id: str,
@@ -1936,7 +2041,10 @@ async def submit_shot_endpoint(
     except ValueError as e:
         raise _http_value_error(e) from e
 
-    prompt_text = compose_h3_prompt(shot.prompt_sections)
+    prompt_text = ensure_global_prompt_in_h3(
+        compose_h3_prompt(shot.prompt_sections),
+        effective_global_prompt(shot.project_id),
+    )
     required_layout_indices = [
         int(item["picture_index"]) for item in selected_layouts
     ]
@@ -1949,6 +2057,7 @@ async def submit_shot_endpoint(
             submitted_picture_indices=(
                 ref.picture_index for ref in shot.refs
             ),
+            require_all_submitted=True,
         )
     except ValueError as e:
         raise _http_value_error(e) from e

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import ComfyImageRef, JobRecord
 from ..base import Pipeline
 from . import workflow
@@ -93,6 +94,9 @@ class ActorPipeline(Pipeline):
         if not description and "actor" not in uploaded_images:
             raise ValueError("description is required when no actor reference is uploaded")
 
+        description = append_global_prompt(
+            description, effective_global_prompt(job.project_id)
+        )
         return workflow.build_actor_prompt(
             description=description or workflow.DEFAULT_DESCRIPTION,
             body_description=p.get("body_description") or "",

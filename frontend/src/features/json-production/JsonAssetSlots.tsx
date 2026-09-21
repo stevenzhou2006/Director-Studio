@@ -71,6 +71,7 @@ export function JsonAssetSlots({
 
       {shot.pictures.map((picture) => {
         const title = pictureSlotTitle(picture.index, picture.role);
+        const linked = Boolean(picture.asset_id);
         const file = files.pictures.get(picture.index) || null;
         const preview = picturePreviews.get(picture.index) || (file && !(file instanceof File) ? file.url : undefined);
         const filename = file instanceof File ? file.name : file?.filename;
@@ -90,38 +91,44 @@ export function JsonAssetSlots({
                 <img className="json-asset-preview" src={preview} alt={`${title} preview`} />
               ) : null}
               <div className="json-asset-slot-footer">
-                {file ? (
+                {linked ? (
+                  <div className="muted tiny json-file-state">
+                    {`Linked library asset: ${picture.asset_id}${picture.file_key ? ` · ${picture.file_key}` : ""}`}
+                  </div>
+                ) : file ? (
                   <div className="filename">{filename}</div>
                 ) : (
                   <div className="muted tiny json-file-state">No file selected</div>
                 )}
-                <div className="json-asset-slot-actions">
-                  <label className="json-upload-control">
-                    <input
-                      type="file"
-                      aria-label={title}
-                      accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
-                      onChange={(e) => {
-                        const next = e.target.files?.[0] || null;
-                        e.target.value = "";
-                        if (!next) return;
-                        onPictureFile(picture.index, next);
-                      }}
-                    />
-                    <span>{file ? "Replace file" : "Choose file"}</span>
-                  </label>
-                  {file ? (
-                    <button
-                      type="button"
-                      className="btn ghost sm json-asset-clear"
-                      aria-label={`Clear ${title}`}
-                      disabled={busy}
-                      onClick={() => onPictureFile(picture.index, null)}
-                    >
-                      Clear
-                    </button>
-                  ) : null}
-                </div>
+                {linked ? null : (
+                  <div className="json-asset-slot-actions">
+                    <label className="json-upload-control">
+                      <input
+                        type="file"
+                        aria-label={title}
+                        accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                        onChange={(e) => {
+                          const next = e.target.files?.[0] || null;
+                          e.target.value = "";
+                          if (!next) return;
+                          onPictureFile(picture.index, next);
+                        }}
+                      />
+                      <span>{file ? "Replace file" : "Choose file"}</span>
+                    </label>
+                    {file ? (
+                      <button
+                        type="button"
+                        className="btn ghost sm json-asset-clear"
+                        aria-label={`Clear ${title}`}
+                        disabled={busy}
+                        onClick={() => onPictureFile(picture.index, null)}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -136,40 +143,49 @@ export function JsonAssetSlots({
       ) : (
         shot.audio.map((audio) => {
           const title = audioSlotTitle(audio.index, audio.label);
+          const linked = Boolean(audio.asset_id);
           const file = files.audio.get(audio.index) || null;
           const filename = file instanceof File ? file.name : file?.filename;
           return (
             <div key={`audio-${audio.index}`} className="field json-asset-slot">
               <span className="json-asset-slot-title">{title}</span>
-              {file ? (
-                <div className="json-asset-file-row">
-                  <div className="filename">{filename}</div>
-                  <button
-                    type="button"
-                    className="btn ghost sm"
-                    disabled={busy}
-                    onClick={() => onAudioFile(audio.index, null)}
-                  >
-                    {`Clear ${title}`}
-                  </button>
+              {linked ? (
+                <div className="muted tiny json-file-state">
+                  {`Linked library asset: ${audio.asset_id}${audio.file_key ? ` · ${audio.file_key}` : ""}`}
                 </div>
               ) : (
-                <div className="muted tiny json-file-state">No file selected</div>
+                <>
+                  {file ? (
+                    <div className="json-asset-file-row">
+                      <div className="filename">{filename}</div>
+                      <button
+                        type="button"
+                        className="btn ghost sm"
+                        disabled={busy}
+                        onClick={() => onAudioFile(audio.index, null)}
+                      >
+                        {`Clear ${title}`}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="muted tiny json-file-state">No file selected</div>
+                  )}
+                  <label className="json-upload-control">
+                    <input
+                      type="file"
+                      aria-label={title}
+                      accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
+                      onChange={(e) => {
+                        const next = e.target.files?.[0] || null;
+                        e.target.value = "";
+                        if (!next) return;
+                        onAudioFile(audio.index, next);
+                      }}
+                    />
+                    <span>{file ? "Replace file" : "Choose file"}</span>
+                  </label>
+                </>
               )}
-              <label className="json-upload-control">
-                <input
-                  type="file"
-                  aria-label={title}
-                  accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,.wav,.mp3,.flac,.m4a"
-                  onChange={(e) => {
-                    const next = e.target.files?.[0] || null;
-                    e.target.value = "";
-                    if (!next) return;
-                    onAudioFile(audio.index, next);
-                  }}
-                />
-                <span>{file ? "Replace file" : "Choose file"}</span>
-              </label>
             </div>
           );
         })

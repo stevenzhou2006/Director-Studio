@@ -561,6 +561,13 @@ def recast_shot_assets(
         scene_id=shot.scene_id or "sc01",
         title=shot.title or "shot",
         script_beat=shot.script_beat or shot.title or "action",
+        shot_type=shot.shot_type or "medium shot",
+        camera_angle=shot.camera_angle or "eye level on the primary action axis",
+        camera_motion=shot.camera_motion or "locked-off",
+        composition=(
+            shot.composition
+            or "primary subjects and action readable in one coherent frame"
+        ),
         duration_s=shot.duration_s or 8.0,
         dialogue=list(shot.dialogue or []),
         asset_matches=[],

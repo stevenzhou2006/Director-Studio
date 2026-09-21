@@ -830,6 +830,39 @@ code {
   padding: 0.16rem 0.38rem;
 }
 
+.layout-reference-card.is-current {
+  border-color: rgba(62, 207, 142, 0.55);
+  box-shadow: inset 3px 0 0 rgba(62, 207, 142, 0.7);
+}
+
+.layout-current-badge {
+  border: 1px solid rgba(62, 207, 142, 0.55);
+  border-radius: 999px;
+  background: rgba(62, 207, 142, 0.14);
+  color: #b8f0d4;
+  font-family: var(--mono);
+  font-size: 0.67rem;
+  letter-spacing: 0.04em;
+  padding: 0.16rem 0.38rem;
+  text-transform: uppercase;
+}
+
+.layout-use-button {
+  border: 1px solid rgba(62, 207, 142, 0.5);
+  border-radius: 999px;
+  background: rgba(62, 207, 142, 0.14);
+  color: #b8f0d4;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.67rem;
+  padding: 0.2rem 0.55rem;
+}
+
+.layout-use-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .layout-remove-button {
   margin-left: auto;
   border: 1px solid rgba(240, 113, 120, 0.45);

@@ -61,6 +61,22 @@ def test_script_planning_stage_guide_loads_as_a_non_empty_block():
     assert len(guide.splitlines()) > 3
 
 
+def test_continuity_stage_guides_teach_persistence():
+    scene = stage_guides.load_stage_guides(("scene-design",))
+    background = stage_guides.load_stage_guides(("background-continuity",))
+    character = stage_guides.load_stage_guides(("character-continuity",))
+    prop = stage_guides.load_stage_guides(("prop-continuity",))
+
+    assert "canonical plate" in scene.lower()
+    assert "topology" in scene.lower()
+    assert "Scene reference" in background
+    assert "scene_id" in background
+    assert "canonical" in character.lower()
+    assert "file_key" in character
+    assert "generic noun" in prop.lower()
+    assert "mechanism" in prop.lower()
+
+
 def test_stage_guide_registry_matches_non_empty_markdown_files():
     guide_dir = stage_guides._guides_dir()
     guide_files = {path.stem for path in guide_dir.glob("*.md")}

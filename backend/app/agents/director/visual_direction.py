@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from ...core.projects.layouts import LayoutBrief, RefRole
 from ...core.projects.models import Shot
+from ...core.prompting import (
+    append_global_prompt,
+    effective_global_prompt,
+    global_prompt_block,
+)
 from .skill_loader import with_director_skill
 
 
@@ -40,6 +45,7 @@ class VisualBrief(BaseModel):
     camera: str = Field(min_length=1)
     scene_lock: list[str] = Field(min_length=1)
     characters: list[VisualCharacter] = Field(default_factory=list)
+    prop_lock: list[str] = Field(default_factory=list)
     forbidden: list[str] = Field(min_length=1)
     generation_prompt: str | None = None
 
@@ -50,6 +56,11 @@ class VisualBrief(BaseModel):
         if not cleaned:
             raise ValueError("list must contain at least one non-empty item")
         return cleaned
+
+    @field_validator("prop_lock")
+    @classmethod
+    def _clean_prop_lock(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
 
 
 class VisualDirectionResult(BaseModel):
@@ -160,6 +171,10 @@ def compile_visual_prompt(
             f"Wardrobe lock:\n{_bullets(character.wardrobe_lock)}"
         )
 
+    prop_block = (
+        f"PROP LOCK\n{_bullets(brief.prop_lock)}\n\n" if brief.prop_lock else ""
+    )
+
     return (
         "Create one photoreal cinematic production still. One continuous frame; "
         "no collage, panels, character sheet, or repeated person.\n\n"
@@ -172,6 +187,7 @@ def compile_visual_prompt(
         f"{_bullets(captions)}\n\n"
         "SCENE LOCK\n"
         f"{_bullets(brief.scene_lock)}\n\n"
+        f"{prop_block}"
         f"{'\n\n'.join(character_sections)}\n\n"
         "FORBIDDEN CHANGES\n"
         f"{_bullets(brief.forbidden)}"
@@ -198,6 +214,7 @@ def _analysis_prompt(
     layout_brief: LayoutBrief | None = None,
     review_image_used: bool = False,
     feedback: str = "",
+    global_prompt: str = "",
 ) -> str:
     def _character_count(caption: str) -> int:
         match = re.match(
@@ -248,7 +265,16 @@ def _analysis_prompt(
             '"interaction":"none or explicit object interaction",'
             '"identity_lock":["..."],"wardrobe_lock":["..."]}]'
         )
+    global_block = ""
+    if (global_prompt or "").strip():
+        global_block = (
+            f"{global_prompt_block(global_prompt)}\n"
+            "This global direction is mandatory for the project; honor it in the "
+            "composition, style, and generation_prompt without contradicting the "
+            "reference responsibilities above.\n\n"
+        )
     return (
+        f"{global_block}"
         "You are the visual director for one image-generation shot. Inspect every attached "
         "image before answering. Image captions are ordered exactly like the attachments.\n\n"
         f"SHOT TITLE: {shot.title}\n"
@@ -275,6 +301,23 @@ def _analysis_prompt(
         "name each ImageN as the authority for that character's exact clothing and state "
         "that ImageN's outfit must be reproduced unchanged, rather than listing colors or "
         "garment types that may not be present. "
+        "PROP/DEVICE GROUNDING: transcribe each prop or device's defining construction "
+        "only from what is actually visible in that object's own attachment: silhouette "
+        "and proportions, mechanism or control type, number and arrangement of parts, "
+        "color, material, and condition. Never substitute or upgrade the mechanism, add "
+        "or remove parts, or infer structure from a generic noun. Write the exact "
+        "construction into prop_lock and name each prop ImageN in generation_prompt as "
+        "the authority for that object, stating it must be reproduced unchanged. If the "
+        "shot names a prop with no attached prop image, describe it only generically in "
+        "generation_prompt and never invent a mechanism. "
+        "SCENE/VEHICLE STRUCTURE GROUNDING: transcribe a vehicle or any large object in "
+        "the scene only from what is actually visible in its own attachment: silhouette, "
+        "open or enclosed body, control type (grip handlebar versus steering wheel), wheel "
+        "count and arrangement, openings, and shell. Never add or invent a cabin, cab, "
+        "roof, windshield, window glass, door, or steering wheel that the attachment does "
+        "not show; if the attachment shows an open frame, describe an open frame. In "
+        "generation_prompt, name the scene ImageN as the authority for that object's exact "
+        "structure and state it must be reproduced unchanged. "
         "If a CHARACTER caption marks the subject as an animal or quadruped, keep that "
         "subject species-accurate on all fours with no human face or hands, and never add "
         "or substitute a person who is not attached as a reference. "
@@ -289,6 +332,7 @@ def _analysis_prompt(
         "quality preamble, or negative instructions inside generation_prompt. Use exactly this schema:\n"
         '{"shot_type":"...","camera":"...","scene_lock":["..."],'
         f'"characters":{characters_schema},'
+        '"prop_lock":["..."],'
         '"forbidden":["..."],"generation_prompt":"..."}'
     )
 
@@ -332,6 +376,7 @@ async def analyze_ref_frame(
     ollama_images = list(vision_images)
     if review_image is not None:
         ollama_images.append(_vision_jpeg(review_image[1]))
+    global_prompt = effective_global_prompt(shot.project_id)
     response = await ollama.chat(
         model,
         with_director_skill(
@@ -341,8 +386,15 @@ async def analyze_ref_frame(
                 layout_brief=layout_brief,
                 review_image_used=review_image is not None,
                 feedback=feedback,
+                global_prompt=global_prompt,
             ),
-            guides=("reference-strategy", "reference-frame-generation"),
+            guides=(
+                "reference-strategy",
+                "reference-frame-generation",
+                "scene-design",
+                "background-continuity",
+                "prop-continuity",
+            ),
         ),
         images=ollama_images,
         require_vision=True,
@@ -358,7 +410,13 @@ async def analyze_ref_frame(
                 model,
                 with_director_skill(
                     _generation_prompt_repair_prompt(brief, captions, missing_refs),
-                    guides=("reference-strategy", "reference-frame-generation"),
+                    guides=(
+                        "reference-strategy",
+                        "reference-frame-generation",
+                        "scene-design",
+                        "background-continuity",
+                        "prop-continuity",
+                    ),
                 ),
                 keep_alive="10m",
                 options={"temperature": 0.0},
@@ -371,7 +429,9 @@ async def analyze_ref_frame(
             )
         except Exception:
             pass
-    compiled = compile_visual_prompt(shot, brief, captions=captions)
+    compiled = append_global_prompt(
+        compile_visual_prompt(shot, brief, captions=captions), global_prompt
+    )
     selected = [
         {"image": f"Image{index}", "file_key": key, "caption": captions[index - 1]}
         for index, (key, _value) in enumerate(ordered, start=1)

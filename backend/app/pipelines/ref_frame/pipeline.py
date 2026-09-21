@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.prompting import (
+    append_global_prompt,
+    effective_global_negative,
+    effective_global_prompt,
+)
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
 from . import workflow
@@ -78,6 +83,9 @@ class RefFramePipeline(Pipeline):
         description = (p.get("description") or "").strip()
         if not description:
             raise ValueError("description is required")
+        description = append_global_prompt(
+            description, effective_global_prompt(job.project_id)
+        )
 
         image_keys = p.get("image_keys")
         if isinstance(image_keys, list) and image_keys:
@@ -117,6 +125,7 @@ class RefFramePipeline(Pipeline):
             job_id=job.id,
             ref_labels=[str(x) for x in ref_labels],
             aspect_ratio=str(p.get("aspect_ratio") or ""),
+            negative_extra=effective_global_negative(job.project_id),
         )
 
     def map_history_outputs(

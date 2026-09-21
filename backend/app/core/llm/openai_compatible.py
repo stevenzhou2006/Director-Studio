@@ -132,6 +132,22 @@ def _response_format(
     }
 
 
+def _pin_greedy_temperature(
+    request: dict[str, Any], converted_format: dict[str, Any] | None
+) -> None:
+    """Pin temperature 0 when a structured response_format is requested.
+
+    Some servers decode JSON schema/object outputs greedily and reject any
+    sampling temperature with a 400 ("send temperature 0 or omit it"). Greedy
+    decoding is the correct default for structured output, so enforce it here
+    instead of relying on an error-retry fallback.
+    """
+    if converted_format is None:
+        return
+    if converted_format.get("type") in {"json_schema", "json_object"}:
+        request["temperature"] = 0
+
+
 def _reasoning(obj: Any) -> str:
     return str(
         _value(obj, "reasoning_content")
@@ -314,6 +330,7 @@ class OpenAICompatibleClient:
         converted_format = _response_format(format)
         if converted_format is not None:
             request["response_format"] = converted_format
+            _pin_greedy_temperature(request, converted_format)
         has_images = any(item.get("images") for item in messages)
 
         try:
@@ -405,6 +422,7 @@ class OpenAICompatibleClient:
         converted_format = _response_format(format)
         if converted_format is not None:
             request["response_format"] = converted_format
+            _pin_greedy_temperature(request, converted_format)
 
         content_parts: list[str] = []
         think_parts: list[str] = []

@@ -189,7 +189,20 @@ def _sync_ref_frame(job: JobRecord) -> None:
                     else (
                         item
                         if append_to_active
-                        else item.model_copy(update={"selected_for_h3": False})
+                        else item.model_copy(
+                            update={
+                                "selected_for_h3": False,
+                                # A replace generation supersedes the Layouts it
+                                # replaced, so the Layout collection shows the new
+                                # study as current and the old ones as history.
+                                "superseded_by": (
+                                    target.id
+                                    if item.selected_for_h3
+                                    and not item.superseded_by
+                                    else item.superseded_by
+                                ),
+                            }
+                        )
                     )
                     for item in shot.layout_refs
                 ],

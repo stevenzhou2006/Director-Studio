@@ -164,6 +164,9 @@ Output rules:
     exit, presence, and absence timing separately as action prose in detailed_description.
   - If there is no layout, lock blocking in prose (screen left/right, who sits where) and
     bind identity/set via actor/scene Picture numbers only.
+- Reference images as <Picture N> when binding identity/wardrobe/set. Every submitted
+  Picture index (1..N) MUST appear as its own <Picture N> tag at least once across the
+  six sections; never leave a submitted Picture unmentioned.
 - Reference images as <Picture N> when binding identity/wardrobe/set. When refs include
   asset_name, bind each named actor to that actor's own picture_index and never swap,
   merge, or reassign actor Pictures, even in a multi-actor shot. Take every actor's
@@ -180,6 +183,18 @@ Output rules:
   identity, wardrobe, set and prop appearance; never replace them with guesses. A
   Layout's visual_analysis describes composition, blocking, and lighting only: never
   copy wardrobe, hair, fur, or color details from it.
+- When an actor ref carries visual_lock, treat it as the most specific authoritative
+  identity and wardrobe fact for that actor: reproduce it exactly and bind it to that
+  actor's own <Picture N>. It refines approved_description; never contradict or
+  generalize it, and never copy it onto a different actor.
+- Treat every prop/device Picture as authoritative for that object's exact design.
+  State its defining construction from the ref's approved metadata or its Picture:
+  silhouette and proportions, mechanism or control type, number and arrangement of
+  parts, color, material, and condition. Never substitute a different mechanism, add
+  or remove parts, or upgrade the design; the same prop keeps the same design in
+  every shot. A generic noun alone is not sufficient — always say how the object is
+  built and operated. If the action names a prop that has no prop Picture, describe
+  it only as far as the approved metadata supports and never invent a mechanism.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
@@ -187,6 +202,12 @@ Output rules:
   detailed_description) exactly once per occurrence in the dialogue list above. A
   unique line appears once; a line that repeats because two characters share it (for
   example both say "hahaha") appears once per speaker, and no extra copies.
+- A GLOBAL DIRECTION block may be provided below. It is mandatory for this project
+  and overrides conflicting style preferences. Apply it consistently across all six
+  sections (look, format, wardrobe, geography, tone, prohibitions) while keeping the
+  six-section structure, exact dialogue, and required <Picture N>/<Audio N> bindings
+  intact. Include its text verbatim once in subject_definitions so the submitted
+  prompt records the direction.
 """
 
 # Backward-compatible name used by existing Director integrations.
@@ -208,8 +229,40 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - layout_asset_id: {layout_asset_id}
 - human feedback: {feedback}
 
+Global direction (mandatory for this project):
+{global_prompt_block}
+
 Agent context snapshot:
 {context_json}
 
 Return the six-section JSON object now.
+"""
+
+GLOBAL_DIRECTION_SYSTEM = """You expand a rough production note into a precise, reusable GLOBAL DIRECTION that every shot of one project must obey.
+
+Rules:
+- Output only the expanded direction text. No preamble, no markdown fence, no commentary.
+- Write in the same language as the user's note.
+- Make every vague noun concrete and checkable: exact construction and mechanism,
+  number and arrangement of parts, silhouette and proportions, wardrobe and
+  materials, colors, environment and geography, lighting direction and time of day,
+  palette, camera/lens feel, aspect ratio, and continuity rules.
+- Turn the user's intent into explicit positive rules and prohibitions that prevent
+  drift.
+- Do not invent story events, characters, or dialogue. This is a persistent
+  visual/continuity directive, not a scene description.
+- Prefer specific, measurable wording over adjectives. When a detail is unspecified,
+  choose one concrete sensible default and state it as fixed.
+- Keep it compact enough to be reused verbatim on every shot (roughly 3-8 sentences
+  or a short bullet list).
+"""
+
+GLOBAL_DIRECTION_USER_TEMPLATE = """Project: {project_name}
+
+User's rough direction:
+---
+{description}
+---
+
+{current_block}Expand this into one detailed global direction that will be attached to every shot's video prompt and every reference-image prompt. Return only the expanded text.
 """

@@ -11,8 +11,13 @@ from ..config import settings
 from ..core.h3.frames import frames_for_seconds
 from ..core.h3.prompt import compose_h3_prompt, validate_h3_prompt
 from ..core.jobs import create_job, start_pipeline_job
+from ..core.library.images import resolve_asset_image
+from ..core.library.store import asset_dir, load_asset
+from ..core.prompting import effective_global_prompt, ensure_global_prompt_in_h3
 from ..core.projects import (
+    JsonProductionAudio,
     JsonProductionDocument,
+    JsonProductionPicture,
     JsonProductionShot,
     JsonProductionStoredAsset,
     Project,
@@ -110,6 +115,98 @@ def _asset_kind(value: str) -> AssetKind:
     return kind
 
 
+_PICTURE_KINDS = {
+    "actor": "actors",
+    "costume": "costumes",
+    "scene": "scenes",
+    "prop": "props",
+    "layout": "layouts",
+}
+_PICTURE_KIND_SEARCH = ("actors", "costumes", "scenes", "props", "layouts")
+
+
+def _declared_slot(
+    shot: JsonProductionShot, kind: AssetKind, index: int
+) -> JsonProductionPicture | JsonProductionAudio | None:
+    slots = shot.pictures if kind == "picture" else shot.audio
+    return next((slot for slot in slots if slot.index == index), None)
+
+
+def _load_picture_asset(asset_id: str, role: str):
+    kind = _PICTURE_KINDS.get(role)
+    if kind:
+        asset = load_asset(kind, asset_id)
+        if asset is not None:
+            return asset
+    for candidate_kind in _PICTURE_KIND_SEARCH:
+        asset = load_asset(candidate_kind, asset_id)
+        if asset is not None:
+            return asset
+    return None
+
+
+def _linked_picture_bytes(
+    project_id: str, slot: JsonProductionPicture
+) -> tuple[str, bytes]:
+    """Resolve a library-linked Picture slot to its real bytes."""
+    if not slot.asset_id:
+        raise HTTPException(400, f"Picture {slot.index} is not library-linked")
+    asset = _load_picture_asset(slot.asset_id, slot.role.value)
+    if asset is None:
+        raise HTTPException(
+            400,
+            f"Picture {slot.index} links to a missing library asset: {slot.asset_id}",
+        )
+    if asset.project_id and asset.project_id != project_id:
+        raise HTTPException(
+            400,
+            f"Picture {slot.index} asset belongs to another project: {slot.asset_id}",
+        )
+    hit = resolve_asset_image(asset, role=slot.role.value, file_key=slot.file_key)
+    if hit is None:
+        raise HTTPException(
+            400,
+            f"Picture {slot.index} library asset has no usable image: {slot.asset_id}",
+        )
+    name, data, _key = hit
+    return name, data
+
+
+def _linked_audio_bytes(
+    project_id: str, slot: JsonProductionAudio
+) -> tuple[str, bytes]:
+    """Resolve a library-linked Audio slot to its real voice reference bytes."""
+    if not slot.asset_id:
+        raise HTTPException(400, f"Audio {slot.index} is not library-linked")
+    asset = load_asset("voices", slot.asset_id)
+    if asset is None or asset.kind != "voices":
+        raise HTTPException(
+            400,
+            f"Audio {slot.index} links to a missing Voice asset: {slot.asset_id}",
+        )
+    if asset.project_id and asset.project_id != project_id:
+        raise HTTPException(
+            400,
+            f"Audio {slot.index} asset belongs to another project: {slot.asset_id}",
+        )
+    file_key = slot.file_key or "reference"
+    filename = (asset.files or {}).get(file_key)
+    if not filename:
+        raise HTTPException(
+            400,
+            f"Audio {slot.index} Voice asset is missing file key "
+            f"{file_key!r}: {slot.asset_id}",
+        )
+    path = asset_dir("voices", slot.asset_id, project_id=asset.project_id) / filename
+    if not path.is_file():
+        raise HTTPException(
+            400,
+            f"Audio {slot.index} Voice reference file not found: "
+            f"{slot.asset_id}/{filename}",
+        )
+    return filename, path.read_bytes()
+
+
 @router.get(
     "/projects/{project_id}/production-storyboard/assets",
     response_model=list[JsonProductionStoredAsset],
@@ -137,6 +234,17 @@ async def put_json_production_asset(
     document = load_json_production_document(project_id)
     shot = _shot_or_404(document, shot_id)
     selected_kind = _asset_kind(kind)
+    slot = _declared_slot(shot, selected_kind, index)
+    if slot is None:
+        raise HTTPException(
+            400, f"{selected_kind.title()} {index} is not declared for shot {shot_id}"
+        )
+    if slot.asset_id:
+        raise HTTPException(
+            400,
+            f"{selected_kind.title()} {index} is linked to library asset "
+            f"{slot.asset_id}; clear the asset link to upload a custom file",
+        )
     allowed = ALLOWED_IMAGE_EXT if selected_kind == "picture" else ALLOWED_AUDIO_EXT
     payloads = await _read_ordered_uploads([file], allowed=allowed, field=selected_kind)
     filename, data = payloads[0]
@@ -199,7 +307,10 @@ async def submit_json_shot(
     ).strip():
         raise HTTPException(400, "MiniMax H3 API key is not configured")
 
-    prompt_text = compose_h3_prompt(shot.prompt)
+    prompt_text = ensure_global_prompt_in_h3(
+        compose_h3_prompt(shot.prompt),
+        effective_global_prompt(project_id),
+    )
     try:
         validate_h3_prompt(
             prompt_text,
@@ -217,12 +328,24 @@ async def submit_json_shot(
                 400,
                 f"expected {len(shot.pictures)} pictures, got {len(pictures)}",
             )
-        picture_payloads = await _read_ordered_uploads(
+        upload_payloads = await _read_ordered_uploads(
             pictures, allowed=ALLOWED_IMAGE_EXT, field="pictures"
         )
     else:
-        picture_payloads = []
-        for slot in shot.pictures:
+        upload_payloads = None
+    picture_payloads: list[tuple[str, bytes]] = []
+    for position, slot in enumerate(shot.pictures):
+        if slot.asset_id:
+            if upload_payloads is not None:
+                raise HTTPException(
+                    400,
+                    f"Picture {slot.index} is linked to library asset "
+                    f"{slot.asset_id}; remove the uploaded file or clear the link",
+                )
+            picture_payloads.append(_linked_picture_bytes(project_id, slot))
+        elif upload_payloads is not None:
+            picture_payloads.append(upload_payloads[position])
+        else:
             loaded = load_json_production_asset(
                 project_id, shot, "picture", slot.index
             )
@@ -237,12 +360,24 @@ async def submit_json_shot(
                 400,
                 f"expected {len(shot.audio)} audios, got {len(audios)}",
             )
-        audio_payloads = await _read_ordered_uploads(
+        audio_uploads = await _read_ordered_uploads(
             audios, allowed=ALLOWED_AUDIO_EXT, field="audios"
         )
     else:
-        audio_payloads = []
-        for slot in shot.audio:
+        audio_uploads = None
+    audio_payloads: list[tuple[str, bytes]] = []
+    for position, slot in enumerate(shot.audio):
+        if slot.asset_id:
+            if audio_uploads is not None:
+                raise HTTPException(
+                    400,
+                    f"Audio {slot.index} is linked to library asset "
+                    f"{slot.asset_id}; remove the uploaded file or clear the link",
+                )
+            audio_payloads.append(_linked_audio_bytes(project_id, slot))
+        elif audio_uploads is not None:
+            audio_payloads.append(audio_uploads[position])
+        else:
             loaded = load_json_production_asset(project_id, shot, "audio", slot.index)
             if loaded is None:
                 raise HTTPException(400, f"missing staged file for Audio {slot.index}")

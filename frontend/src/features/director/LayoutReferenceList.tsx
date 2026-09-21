@@ -6,7 +6,7 @@ import {
   type Shot,
 } from "../../shared/api/types";
 import { isDisplayableLayout, isRetiredLayout } from "../../shared/layoutReferenceStatus";
-import { removeLayoutReference } from "./api";
+import { removeLayoutReference, useLayout } from "./api";
 
 interface LayoutReferenceListProps {
   shot: Shot;
@@ -32,8 +32,8 @@ function reviewLabel(status: LayoutReviewStatus | null, layout: LayoutReference)
   if (layout.job_status === "failed") return "generation failed";
   if (layout.job_status === "cancelled") return "generation cancelled";
   if (layout.superseded_by) return "previous";
-  if (status === "reject") return "not used";
-  if (layout.asset_id) return "available";
+  if (status === "reject") return "rejected";
+  if (layout.asset_id) return layout.selected_for_h3 ? "in use" : "not used";
   if (!status) return "awaiting generation";
   return status.replace(/_/g, " ");
 }
@@ -53,6 +53,9 @@ function LayoutReferenceCard({
   onRemove,
   removing = false,
   removeDisabled = false,
+  onUse,
+  using = false,
+  useDisabled = false,
 }: {
   shot: Shot;
   layout: LayoutReference;
@@ -60,6 +63,9 @@ function LayoutReferenceCard({
   onRemove?: (layout: LayoutReference) => void;
   removing?: boolean;
   removeDisabled?: boolean;
+  onUse?: (layout: LayoutReference) => void;
+  using?: boolean;
+  useDisabled?: boolean;
 }) {
   const picture = layout.asset_id
     ? shot.refs.find(
@@ -71,7 +77,10 @@ function LayoutReferenceCard({
   const imageUrl = layoutPreviewUrl(layout.asset_id);
 
   return (
-    <article className="layout-reference-card" aria-labelledby={`layout-${layout.id}-title`}>
+    <article
+      className={`layout-reference-card${layout.selected_for_h3 ? " is-current" : ""}`}
+      aria-labelledby={`layout-${layout.id}-title`}
+    >
       <details className="layout-reference-details" open={shouldDefaultExpand(layout)}>
         <summary className="layout-reference-summary">
           <span className="layout-reference-kicker">Layout</span>
@@ -81,7 +90,33 @@ function LayoutReferenceCard({
           <span className={`gate-badge layout-review-${status || "queued"}`}>
             {reviewLabel(status, layout)}
           </span>
+          {layout.selected_for_h3 ? (
+            <span className="layout-current-badge">Current</span>
+          ) : null}
           {picture ? <span className="layout-picture-badge">Picture {picture.picture_index}</span> : null}
+          {onUse
+          && layout.asset_id
+          && !layout.selected_for_h3
+          && layout.review_status !== "reject" ? (
+            <button
+              type="button"
+              className="layout-use-button"
+              aria-label={`Use ${layout.purpose || "layout"} for H3`}
+              title={
+                isActiveJob(layout)
+                  ? "Wait for the running job to finish"
+                  : "Use this Layout for the prompt and H3 run"
+              }
+              disabled={useDisabled || using || isActiveJob(layout)}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onUse(layout);
+              }}
+            >
+              {using ? "Using…" : "Use this Layout"}
+            </button>
+          ) : null}
           {onRemove ? (
             <button
               type="button"
@@ -166,13 +201,21 @@ function LayoutReferenceCard({
 
 export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenImage, onShotUpdated }: LayoutReferenceListProps) {
   const layouts = shot.layout_refs;
-  const displayableLayouts = layouts.filter(isDisplayableLayout);
-  const currentLayouts = displayableLayouts.filter((layout) => !isRetiredLayout(layout));
-  const retiredLayouts = displayableLayouts.filter(isRetiredLayout);
+  const byNewestFirst = (a: LayoutReference, b: LayoutReference) =>
+    (b.created_at || "").localeCompare(a.created_at || "") || b.id.localeCompare(a.id);
+  const displayableLayouts = [...layouts].filter(isDisplayableLayout);
+  const currentLayouts = displayableLayouts
+    .filter((layout) => !isRetiredLayout(layout))
+    .sort(byNewestFirst);
+  const retiredLayouts = displayableLayouts
+    .filter(isRetiredLayout)
+    .sort(byNewestFirst);
   const [adding, setAdding] = useState(false);
   const [description, setDescription] = useState("");
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [usingId, setUsingId] = useState<string | null>(null);
+  const [useError, setUseError] = useState<string | null>(null);
 
   const discuss = () => {
     const trimmed = description.trim();
@@ -195,10 +238,26 @@ export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenI
     }
   };
 
+  const useReference = async (layout: LayoutReference) => {
+    setUsingId(layout.id);
+    setUseError(null);
+    try {
+      const updated = await useLayout(shot.id, layout.id);
+      onShotUpdated?.(updated);
+    } catch (cause) {
+      setUseError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUsingId(null);
+    }
+  };
+
   const cardProps = (layout: LayoutReference) => ({
     onRemove: removeReference,
     removing: removingId === layout.id,
     removeDisabled: busy,
+    onUse: useReference,
+    using: usingId === layout.id,
+    useDisabled: busy,
   });
 
   return (
@@ -206,6 +265,11 @@ export function LayoutReferenceList({ shot, busy, onDiscussAddReference, onOpenI
       {removeError ? (
         <div className="banner error" role="alert">
           Could not remove reference frame: {removeError}
+        </div>
+      ) : null}
+      {useError ? (
+        <div className="banner error" role="alert">
+          Could not use this Layout: {useError}
         </div>
       ) : null}
       {currentLayouts.map((layout) => (

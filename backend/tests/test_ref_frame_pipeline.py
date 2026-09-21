@@ -14,6 +14,7 @@ from app.pipelines.ref_frame.workflow import (
     NODE_DESCRIPTION,
     NODE_LIGHTNING_LORA,
     NODE_MODEL_SAMPLING,
+    NODE_NEGATIVE,
     NODE_REF_IMAGE_1,
     NODE_SAMPLER,
     NODE_SAVE,
@@ -67,7 +68,7 @@ def test_fill_sets_description_seed_and_refs():
     assert g[NODE_SAMPLER]["inputs"]["steps"] == DEFAULT_STEPS
     assert g[NODE_SAMPLER]["inputs"]["cfg"] == pytest.approx(DEFAULT_CFG)
     negative_id = g[NODE_SAMPLER]["inputs"]["negative"][0]
-    assert g[negative_id]["class_type"] == "ConditioningZeroOut"
+    assert g[negative_id]["class_type"] == "ReferenceLatent"
     loaders = [
         n
         for n in g.values()
@@ -102,26 +103,46 @@ def test_multi_ref_quality_graph_keeps_vl_images_and_chains_full_res_latents():
         for nid, node in g.items()
         if node.get("class_type") == "ReferenceLatent"
     }
+
+    assert len(vae_encodes) == 2
+    # Positive repeats each reference twice; the negative carries each once with a
+    # real negative prompt so prohibitions are not dropped.
+    assert len(reference_latents) == 6
     zero_nodes = {
         nid: node
         for nid, node in g.items()
         if node.get("class_type") == "ConditioningZeroOut"
     }
+    assert zero_nodes == {}
     methods = [
         node
         for node in g.values()
         if node.get("class_type") == "FluxKontextMultiReferenceLatentMethod"
     ]
 
-    assert len(vae_encodes) == 2
-    assert len(reference_latents) == 4  # quality mode repeats each reference once
-    assert len(zero_nodes) == 1
+    assert len(methods) == 2
     assert methods[0]["inputs"]["reference_latents_method"] == "index_timestep_zero"
 
     sampler = g[NODE_SAMPLER]["inputs"]
     assert g[sampler["positive"][0]]["class_type"] == "ReferenceLatent"
-    assert g[sampler["negative"][0]]["class_type"] == "ConditioningZeroOut"
+    assert g[sampler["negative"][0]]["class_type"] == "ReferenceLatent"
     assert g[sampler["latent_image"][0]]["class_type"] == "VAEEncode"
+
+
+def test_negative_prompt_carries_global_negative_extra():
+    g = fill_layout_graph(
+        minimal_graph(),
+        {
+            "description": "Place the subject in the scene.",
+            "images": ["scene.jpg", "actor.png"],
+            "negative_extra": "glass windshield, enclosed cab",
+        },
+    )
+    neg = g[NODE_NEGATIVE]
+    assert neg["class_type"] == "TextEncodeQwenImageEditPlus"
+    assert "glass windshield" in neg["inputs"]["prompt"]
+    # Built-in vehicle-enclosure prohibitions are still present.
+    assert "car body" in neg["inputs"]["prompt"]
 
 
 def test_reference_frame_uses_fixed_quality_canvas_without_stretching_identity_refs():
@@ -253,7 +274,7 @@ def test_scene_only_uses_quality_reference_latent():
     latent_id = g[NODE_SAMPLER]["inputs"]["latent_image"][0]
     assert g[latent_id]["class_type"] == "VAEEncode"
     refs = [node for node in g.values() if node.get("class_type") == "ReferenceLatent"]
-    assert len(refs) == 2
+    assert len(refs) == 3
     assert g[NODE_SAMPLER]["inputs"]["denoise"] == pytest.approx(1.0)
 
 

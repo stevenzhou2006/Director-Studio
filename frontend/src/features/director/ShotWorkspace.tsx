@@ -242,6 +242,13 @@ export function ShotWorkspace({
                     <h4>Layout studies</h4>
                   </header>
                   {selected.layout_refs.length ? (
+                    <p className="field-hint">
+                      The Layout marked <strong>Current</strong> (with a Picture badge) is the
+                      one used for the H3 prompt and reference images. Other Layouts are
+                      alternatives and history.
+                    </p>
+                  ) : null}
+                  {selected.layout_refs.length ? (
                     <LayoutReferenceList
                       shot={selected}
                       busy={busy}

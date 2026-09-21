@@ -89,7 +89,7 @@ export async function getProject(projectId: string): Promise<ProjectDetail> {
 
 export async function updateProject(
   projectId: string,
-  body: { name?: string; script_text?: string },
+  body: { name?: string; script_text?: string; global_prompt?: string },
 ): Promise<Project> {
   const res = await fetch(`/api/projects/${projectId}`, {
     method: "PATCH",
@@ -98,6 +98,65 @@ export async function updateProject(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+export interface GlobalDirection {
+  detail: string;
+  negative: string;
+}
+
+/** Read the app-wide global direction applied to every project. */
+export async function getGlobalDirection(): Promise<GlobalDirection> {
+  const res = await fetch("/api/global-direction");
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return {
+    detail: String(data?.detail ?? ""),
+    negative: String(data?.negative ?? ""),
+  };
+}
+
+/** Persist the app-wide global direction applied to every project. */
+export async function saveGlobalDirection(
+  detail: string,
+  negative: string,
+): Promise<GlobalDirection> {
+  const res = await fetch("/api/global-direction", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detail, negative }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return {
+    detail: String(data?.detail ?? ""),
+    negative: String(data?.negative ?? ""),
+  };
+}
+
+/** Read the app-wide global direction applied to every project. */
+export async function getGlobalPrompt(): Promise<string> {
+  return (await getGlobalDirection()).detail;
+}
+
+/** Persist the app-wide global direction applied to every project. */
+export async function saveGlobalPrompt(detail: string): Promise<string> {
+  return (await saveGlobalDirection(detail, "")).detail;
+}
+
+/** Expand a rough note into a detailed global direction via the Director LLM. */
+export async function expandGlobalPrompt(
+  description: string,
+  current = "",
+): Promise<string> {
+  const res = await fetch("/api/global-direction/expand", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description, current }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return String(data?.detail ?? "");
 }
 
 export async function planProject(projectId: string): Promise<ProjectDetail> {
@@ -336,6 +395,17 @@ export async function selectLayout(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ selected_for_h3: selectedForH3 }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function useLayout(
+  shotId: string,
+  layoutRefId: string,
+): Promise<Shot> {
+  const res = await fetch(`/api/shots/${shotId}/layouts/${layoutRefId}/use`, {
+    method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();

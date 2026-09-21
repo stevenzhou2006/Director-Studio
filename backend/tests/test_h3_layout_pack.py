@@ -104,6 +104,72 @@ def test_collect_h3_images_follows_picture_index(tmp_path, monkeypatch):
     assert len(images["ref_1"][1]) > 2048
 
 
+def test_collect_h3_images_crops_actor_turnaround_sheet(tmp_path, monkeypatch):
+    """H3 must not be conditioned on a raw multi-panel contact sheet."""
+    import io
+
+    from app.config import settings
+    from app.api import projects as projects_api
+
+    lib = tmp_path / "library"
+    monkeypatch.setattr(settings, "library_root", lib)
+    monkeypatch.setattr(settings, "projects_dir", tmp_path / "projects")
+
+    import os
+
+    adir = lib / "actors" / "act_sheet"
+    adir.mkdir(parents=True, exist_ok=True)
+    # Incompressible noise so the sheet clears resolve_asset_image's 2 KB
+    # placeholder filter.
+    sheet = Image.frombytes("RGB", (768, 256), os.urandom(768 * 256 * 3))
+    sheet.save(adir / "sheet.png")
+    asset = LibraryAsset(
+        id="act_sheet",
+        kind="actors",
+        name="cat",
+        notes="",
+        pipeline_id="actor",
+        job_id="",
+        created_at="t",
+        files={"fullbody_threeview": "sheet.png"},
+        meta={},
+    )
+    (adir / "asset.json").write_text(
+        asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    shot = Shot(
+        id="sht_sheet",
+        project_id="prj_1",
+        scene_id="sc01",
+        title="t",
+        script_beat="b",
+        duration_s=5.0,
+        refs=[
+            ShotRef(
+                role=RefRole.actor,
+                asset_id="act_sheet",
+                picture_index=1,
+                file_key="fullbody_threeview",
+            )
+        ],
+        prompt_sections=PromptSections(
+            subject_definitions="s",
+            summary="s",
+            retention_analysis="r",
+            detailed_description="d",
+            overall_soundscape="o",
+            non_diegetic_music="m",
+        ),
+    )
+
+    images = projects_api._collect_h3_images(shot)
+    name, data = images["ref_0"]
+    assert name == "actor_front_panel.png"
+    with Image.open(io.BytesIO(data)) as cropped:
+        assert cropped.width < 768
+
+
 def test_collect_h3_images_keeps_same_asset_with_different_file_keys(
     tmp_path, monkeypatch
 ):

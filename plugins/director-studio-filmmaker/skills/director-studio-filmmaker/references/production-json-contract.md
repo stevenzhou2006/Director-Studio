@@ -60,6 +60,12 @@ Return one valid JSON object with no Markdown fence or surrounding explanation.
 - `audio` contains 0-3 objects. Indices must be ordered and contiguous from 1.
 - Every `label` is non-empty and identifies the exact approved asset the user
   should attach; it is not an invented path or ID.
+- A slot may optionally carry `asset_id` and `file_key` to link it to a real
+  Director Studio library asset. When `asset_id` is present, Director Studio
+  resolves that slot's bytes from the library and the label is the human-readable
+  name of the linked asset. When it is absent, the slot is filled by a manual
+  upload in Director Studio. Do not invent `asset_id` values; use one only when it
+  is an ID you were actually given.
 - All six `prompt` values are non-empty strings.
 
 ## Final Validation
@@ -68,8 +74,13 @@ First enforce the exact document shape shown above. Reject generic lookalike
 schemas that add a `project` wrapper, use `duration_sec` instead of `duration_s`,
 use Picture fields such as `type`, `src`, or `character_reference`, or provide
 `prompt` as one string instead of the six-field object. Reject invented `ref://`
-URIs, ungenerated tail frames, filenames, IDs, or asset approvals. Every Picture
-and Audio label must resolve to a real user-provided or user-approved asset.
+URIs, ungenerated tail frames, filenames, IDs, or asset approvals.
+
+Every Picture and Audio label must name a real user-provided or user-approved
+asset that actually exists in the production. A label is an authoring declaration,
+not a runtime guarantee: only `asset_id` links a slot to a library asset, and
+Director Studio verifies that link when the shot is submitted. Do not invent
+`asset_id` values or claim that a label resolves when it does not.
 
 Before formatting the final object, confirm that every shot's requested actions,
 camera changes, dialogue, and state transitions can plausibly fit its duration.

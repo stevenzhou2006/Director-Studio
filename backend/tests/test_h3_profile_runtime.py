@@ -37,6 +37,12 @@ SAMPLE_PROMPT = (
     "non_diegetic_music:\nF"
 )
 
+# A prompt that binds every submitted Picture, for the strict build_prompt path.
+SAMPLE_PROMPT_BOUND = SAMPLE_PROMPT.replace(
+    "retention_analysis:\nC\n",
+    "retention_analysis:\nC retained from <Picture 1>.\n",
+)
+
 
 def _job_params(**overrides: object) -> dict[str, object]:
     params: dict[str, object] = {
@@ -310,7 +316,7 @@ def test_pipeline_reads_snapshot_for_graph_and_output_mapping(
         name="snapshot consumer",
         params={
             "h3_provider": "local",
-            "prompt": SAMPLE_PROMPT,
+            "prompt": SAMPLE_PROMPT_BOUND,
             "dialogue": [],
             "frames": 294,
             "image_keys": ["ref_0"],

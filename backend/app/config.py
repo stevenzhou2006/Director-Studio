@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     job_timeout_sec: float = 1800.0
     max_upload_mb: int = 20
 
+    # App-wide global direction appended to every generation prompt (H3 video,
+    # Layout/reference frames, and asset pipelines). A project's own
+    # ``global_prompt`` overrides this default. Empty means no injection.
+    global_prompt: str = ""
+
     # H3 execution provider. ``local`` runs the configured Comfy workflow via
     # the official Comfy MCP transport; ``minimax`` uses the official
     # asynchronous MiniMax H3 V2 API. ``mcp`` remains a legacy alias for local.

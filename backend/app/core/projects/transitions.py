@@ -212,6 +212,41 @@ def select_layout_reference(
     return working
 
 
+def use_layout_reference(shot: Shot, layout_ref_id: str) -> Shot:
+    """Make exactly one Layout the active composition for the prompt and H3.
+
+    Unlike append selection this replaces the active set, so an explicit user
+    choice wins over the automatically promoted generation. Prior alternatives
+    are kept (not superseded) so the user can switch back later.
+    """
+    target = _layout_reference(shot, layout_ref_id)
+    if not target.asset_id:
+        raise ValueError("Layout has no generated image yet")
+    if target.review_status == LayoutReviewStatus.reject:
+        raise ValueError("rejected Layout cannot be used")
+    if target.job_status in {JobStatus.failed, JobStatus.cancelled}:
+        raise ValueError("failed Layout cannot be used")
+    replacements = [
+        layout.model_copy(
+            update={
+                "selected_for_h3": layout.id == target.id,
+                # Re-using a retired Layout clears its retired flag so it is no
+                # longer filtered out of the active set.
+                "superseded_by": (
+                    None if layout.id == target.id else layout.superseded_by
+                ),
+            }
+        )
+        for layout in shot.layout_refs
+    ]
+    working = shot.model_copy(update={"layout_refs": replacements})
+    working = mirror_legacy_layout_fields(
+        working,
+        compatibility_primary_layout_id=target.id,
+    )
+    return sync_selected_layout_refs(working)
+
+
 def apply_transition(shot: Shot, event: str, **payload) -> Shot:
     """Apply a named human-gate / lifecycle event. Raises ValueError on illegal moves."""
     event = (event or "").strip()

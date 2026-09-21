@@ -76,11 +76,18 @@ function parsePictures(raw: unknown, shotId: string): JsonProductionPicture[] {
     if (typeof label !== "string" || !label.trim()) {
       throw new Error(`shot ${shotId}: picture ${index} label must be non-empty`);
     }
-    pictures.push({
+    const picture: JsonProductionPicture = {
       index,
       role: role as JsonPictureRole,
       label,
-    });
+    };
+    if (typeof item.asset_id === "string" && item.asset_id.trim()) {
+      picture.asset_id = item.asset_id;
+    }
+    if (typeof item.file_key === "string" && item.file_key.trim()) {
+      picture.file_key = item.file_key;
+    }
+    pictures.push(picture);
   }
   const indexes = pictures.map((p) => p.index);
   const expected = Array.from({ length: pictures.length }, (_, i) => i + 1);
@@ -114,7 +121,14 @@ function parseAudio(raw: unknown, shotId: string): JsonProductionAudio[] {
     if (typeof label !== "string" || !label.trim()) {
       throw new Error(`shot ${shotId}: audio ${index} label must be non-empty`);
     }
-    audio.push({ index, label });
+    const audioSlot: JsonProductionAudio = { index, label };
+    if (typeof item.asset_id === "string" && item.asset_id.trim()) {
+      audioSlot.asset_id = item.asset_id;
+    }
+    if (typeof item.file_key === "string" && item.file_key.trim()) {
+      audioSlot.file_key = item.file_key;
+    }
+    audio.push(audioSlot);
   }
   const indexes = audio.map((a) => a.index);
   const expected = Array.from({ length: audio.length }, (_, i) => i + 1);
@@ -284,11 +298,13 @@ export function validateShotReadiness(
   }
 
   for (const picture of shot.pictures) {
+    if (picture.asset_id) continue;
     if (!files.pictures.has(picture.index)) {
       errors.push(`shot ${shot.id}: missing file for Picture ${picture.index}`);
     }
   }
   for (const audio of shot.audio) {
+    if (audio.asset_id) continue;
     if (!files.audio.has(audio.index)) {
       errors.push(`shot ${shot.id}: missing file for Audio ${audio.index}`);
     }

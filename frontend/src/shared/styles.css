@@ -446,6 +446,17 @@ code {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.chat-bubble.background {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elev));
+}
+
+.chat-bubble.background .chat-role {
+  color: color-mix(in srgb, var(--info) 80%, var(--text));
+  font-weight: 600;
+}
+
 .chat-trace,
 .chat-think {
   margin: 0.35rem 0 0.55rem;

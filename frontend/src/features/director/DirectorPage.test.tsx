@@ -1024,6 +1024,97 @@ describe("Director shot actions", () => {
 
     expect(screen.getAllByText("after entry").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Reference frame.*ready for review/i)).toHaveLength(1);
+    expect(screen.getByText("Layout update")).toBeTruthy();
+  });
+
+  it("holds a Layout notice until the Director is idle so it cannot be mistaken for a reply", async () => {
+    vi.useFakeTimers();
+    const project = {
+      id: "prj_test",
+      name: "Test project",
+      script_text: "INT. HALLWAY - DAY",
+      mode: "director" as const,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      shot_ids: [testShot.id],
+    };
+    const running = {
+      ...testShot,
+      status: "ref_frame_pending" as const,
+      layout_asset_id: null,
+      layout_refs: [
+        {
+          id: "lr_bg",
+          asset_id: null,
+          job_id: "job_bg",
+          job_status: "running" as const,
+          job_error: "",
+          purpose: "primary composition",
+          state_description: "A background Layout is rendering.",
+          time_hint: "",
+          source_refs: [],
+          review_status: null,
+          review_feedback: "",
+          selected_for_h3: false,
+          created_at: "2026-08-26T10:00:00Z",
+        },
+      ],
+    };
+    const finished = {
+      ...testShot,
+      status: "needs_review" as const,
+      layout_asset_id: "lay_bg",
+      refs: [
+        {
+          role: "layout_ref_frame" as const,
+          asset_id: "lay_bg",
+          picture_index: 1,
+          file_key: "layout",
+        },
+      ],
+      layout_refs: [
+        {
+          ...running.layout_refs[0],
+          asset_id: "lay_bg",
+          job_status: "succeeded" as const,
+          review_status: "pending_review" as const,
+        },
+      ],
+    };
+    vi.mocked(getProject).mockResolvedValue({ project, shots: [running] });
+    const action = deferred<Awaited<ReturnType<typeof chatWithDirectorStream>>>();
+    vi.mocked(chatWithDirectorStream).mockImplementationOnce(() => action.promise);
+
+    render(<DirectorPage />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    fireEvent.change(screen.getByPlaceholderText(/Talk to the Director/), {
+      target: { value: "Write the H3 prompt for shot 1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The Layout finishes while the Director request is still in flight.
+    vi.mocked(getProject).mockResolvedValue({ project, shots: [finished] });
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/ready for review/i)).toBeNull();
+
+    action.resolve({
+      reply: "The six-section H3 prompt for Corridor walk-in is ready.",
+      actions: [],
+      project,
+      shots: [finished],
+      images: [],
+      thinking: "",
+      steps: [],
+    });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(screen.getByText(/ready for review/i)).toBeTruthy();
+    expect(screen.getByText("Layout update")).toBeTruthy();
   });
 
   it("does not let a stale polling response overwrite a Layout added through Director chat", async () => {

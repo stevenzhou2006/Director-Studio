@@ -174,6 +174,9 @@ export interface ChatImage {
 export interface ChatMessage {
   id?: string;
   role: "user" | "assistant";
+  /** Background notices (e.g. an async Layout finishing) are rendered apart
+   * from Director replies so they are not mistaken for a command response. */
+  kind?: "background";
   content: string;
   images?: ChatImage[];
   created_at?: string;

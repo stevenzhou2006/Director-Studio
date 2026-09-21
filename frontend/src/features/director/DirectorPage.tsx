@@ -425,7 +425,7 @@ function DirectorAgentWorkspace({
     };
   }, [chatActive, loadProject, projectId, refreshProjects]);
 
-  // Poll while jobs run; when a new layout appears, push it into the chat
+  // Poll while jobs run so shots pick up finished Layouts.
   useEffect(() => {
     if (!projectId) return;
     const active = shots.some(shouldPollShot);
@@ -437,29 +437,6 @@ function DirectorAgentWorkspace({
           if (revisionAtRequest !== shotRevision.current) return;
           replaceShots(d.shots);
           setPollError(null);
-          const fresh = d.shots.flatMap((shot) =>
-            layoutChatEntries(shot)
-              .filter((entry) => !seenLayouts.current.has(entry.key))
-              .map((entry) => ({ shot, entry })),
-          );
-          if (fresh.length) {
-            for (const { entry } of fresh) {
-              seenLayouts.current.add(entry.key);
-            }
-            setMessages((m) => [
-              ...m,
-              {
-                role: "assistant",
-                content: `Reference frame${fresh.length === 1 ? " is" : "s are"} ready for review: ${fresh.map(({ shot, entry }) => `${shot.title} (${entry.purpose})`).join(", ")}`,
-                images: fresh.map(({ shot, entry }) => ({
-                  url: entry.url,
-                  caption: `${shot.title} · ${entry.purpose}`,
-                  shot_id: shot.id,
-                })),
-              },
-            ]);
-            notifyLibraryChanged();
-          }
         })
         .catch((cause) => {
           setPollError(`Could not refresh Layout status: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -467,6 +444,36 @@ function DirectorAgentWorkspace({
     }, 2500);
     return () => window.clearInterval(t);
   }, [projectId, replaceShots, shots]);
+
+  // Announce newly arrived Layouts as background notices. These are held until
+  // the Director is idle so a job finishing mid request is never mistaken for
+  // the reply to the command the user just sent.
+  useEffect(() => {
+    if (busy || chatActive || !shots.length) return;
+    const fresh = shots.flatMap((shot) =>
+      layoutChatEntries(shot)
+        .filter((entry) => !seenLayouts.current.has(entry.key))
+        .map((entry) => ({ shot, entry })),
+    );
+    if (!fresh.length) return;
+    for (const { entry } of fresh) {
+      seenLayouts.current.add(entry.key);
+    }
+    setMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        kind: "background",
+        content: `Reference frame${fresh.length === 1 ? " is" : "s are"} ready for review: ${fresh.map(({ shot, entry }) => `${shot.title} (${entry.purpose})`).join(", ")}`,
+        images: fresh.map(({ shot, entry }) => ({
+          url: entry.url,
+          caption: `${shot.title} · ${entry.purpose}`,
+          shot_id: shot.id,
+        })),
+      },
+    ]);
+    notifyLibraryChanged();
+  }, [busy, chatActive, notifyLibraryChanged, shots]);
 
   useEffect(() => {
     const log = chatLogRef.current;
@@ -778,9 +785,9 @@ function DirectorAgentWorkspace({
             return (
               <div
                 key={m.id || i}
-                className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}
+                className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}${m.kind === "background" ? " background" : ""}`}
               >
-              <div className="chat-role">{m.role === "user" ? "You" : "Director"}</div>
+              <div className="chat-role">{m.role === "user" ? "You" : m.kind === "background" ? "Layout update" : "Director"}</div>
               {m.steps?.length ? (
                 <details className="chat-trace" open={false}>
                   <summary>Process ({m.steps.length})</summary>

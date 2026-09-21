@@ -460,6 +460,55 @@ async def test_schema_rejection_retries_once_without_response_format() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_with_images_retries_without_response_format() -> None:
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "response_format" in body:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "the engine refused this request: SCHEMA on a request "
+                            "with images is not supported"
+                        ),
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        return _chat_response(content='{"generation_prompt":"a frame"}')
+
+    client = _client(handler)
+    try:
+        result = await client.chat_response(
+            "vision-model",
+            messages=[
+                {"role": "user", "content": "look", "images": ["aGVsbG8="]}
+            ],
+            format={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            require_vision=True,
+        )
+    finally:
+        await client.close()
+
+    assert len(bodies) == 2
+    assert "response_format" not in bodies[1]
+    retried_content = bodies[1]["messages"][0]["content"]
+    instruction_text = (
+        retried_content
+        if isinstance(retried_content, str)
+        else " ".join(
+            part.get("text", "") for part in retried_content if isinstance(part, dict)
+        )
+    )
+    assert "Return only valid JSON" in instruction_text
+    assert result["content"] == '{"generation_prompt":"a frame"}'
+
+
+@pytest.mark.asyncio
 async def test_required_vision_rejection_is_not_retried_as_text() -> None:
     attempts = 0
 

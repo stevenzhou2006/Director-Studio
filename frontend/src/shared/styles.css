@@ -848,13 +848,14 @@ code {
 }
 
 .layout-use-button {
-  border: 1px solid rgba(62, 207, 142, 0.5);
+  border: 1px solid color-mix(in srgb, var(--ok) 55%, var(--border-strong));
   border-radius: 999px;
-  background: rgba(62, 207, 142, 0.14);
-  color: #b8f0d4;
+  background: color-mix(in srgb, var(--ok) 14%, var(--panel));
+  color: color-mix(in srgb, var(--ok) 82%, var(--text));
   cursor: pointer;
   font-family: var(--mono);
   font-size: 0.67rem;
+  font-weight: 600;
   padding: 0.2rem 0.55rem;
 }
 

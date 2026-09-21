@@ -294,20 +294,58 @@ def _status_summary(project: Project, shots: list[Shot]) -> str:
     return "\n".join(lines)
 
 
+def _visible_layout_assets(shot: Shot) -> list[tuple[str, str]]:
+    """Return the Layout assets a Shot currently displays, in order.
+
+    Mirrors the frontend ``layoutChatEntries`` so the Director response and the
+    chat cards agree: only assets that are actually submitted to the Shot (or
+    its legacy primary) count, and rejected or superseded Layouts are hidden.
+    """
+    layouts = shot.layout_refs
+    if layouts:
+        submitted = {
+            ref.asset_id
+            for ref in shot.refs
+            if (ref.role.value if hasattr(ref.role, "value") else str(ref.role))
+            == "layout_ref_frame"
+            and ref.asset_id
+        }
+        if not submitted and shot.layout_asset_id:
+            submitted.add(shot.layout_asset_id)
+        visible: list[tuple[str, str]] = []
+        for layout in layouts:
+            if not layout.asset_id or layout.asset_id not in submitted:
+                continue
+            review = (
+                layout.review_status.value
+                if hasattr(layout.review_status, "value")
+                else layout.review_status
+            )
+            if review == "reject" or layout.superseded_by:
+                continue
+            visible.append((layout.asset_id, layout.purpose))
+        return visible
+    if shot.layout_asset_id:
+        return [(shot.layout_asset_id, "reference frame")]
+    return []
+
+
 def _layout_images(shots: list[Shot], *, only_shot_ids: set[str] | None = None) -> list[ChatImage]:
     out: list[ChatImage] = []
     for i, s in enumerate(shots, 1):
         if only_shot_ids is not None and s.id not in only_shot_ids:
             continue
-        if not s.layout_asset_id:
-            continue
-        out.append(
-            ChatImage(
-                url=f"/api/files/library/layouts/{s.layout_asset_id}/layout.png",
-                caption=f"{i}. {s.title}",
-                shot_id=s.id,
+        for asset_id, purpose in _visible_layout_assets(s):
+            caption = f"{i}. {s.title}"
+            if purpose and purpose != "reference frame":
+                caption = f"{caption} · {purpose}"
+            out.append(
+                ChatImage(
+                    url=f"/api/files/library/layouts/{asset_id}/layout.png",
+                    caption=caption,
+                    shot_id=s.id,
+                )
             )
-        )
     return out
 
 
@@ -1141,9 +1179,9 @@ async def orchestrate_chat(
         imgs = _layout_images(sh, only_shot_ids=target_ids) if target_ids else []
         if not ids and any(a.startswith(("approve", "reject", "status", "ref_frame")) for a in acts):
             imgs = _layout_images(sh, only_shot_ids=target_ids or None)
-        # Always show existing layouts on status
-        if "status" in acts or intent == "status":
-            imgs = _layout_images(sh, only_shot_ids=target_ids or None)
+        # Always show the full current Layout set on status and bulk generation.
+        if "status" in acts or intent == "status" or "ref_frame_all" in acts:
+            imgs = _layout_images(sh, only_shot_ids=None)
         if extras:
             imgs = [
                 img

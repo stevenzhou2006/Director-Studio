@@ -17,6 +17,7 @@ from app.core.projects.models import PromptSections, Shot, ShotStatus
 from app.core.projects.store import (
     create_project,
     load_project,
+    load_shot,
     save_project,
     save_shot,
 )
@@ -344,6 +345,109 @@ async def test_shot_specific_chat_returns_only_the_target_shot_layout(
     assert [image.shot_id for image in result.images] == [shot_one.id]
     assert '"material_review_pending":true' in prompts[0]
     assert '"asset_id":"act_agent"' in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_bulk_generate_references_reports_every_shot_layout(
+    tmp_projects_dir,
+):
+    from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
+    from app.core.projects.models import RefRole
+
+    project = create_project("Bulk refs", "The cat greets. The cat retorts.")
+    old_one = LayoutReference(
+        id="lref_bulk_one",
+        asset_id="lay_bulk_one",
+        job_id="job_bulk_one",
+        job_status="succeeded",
+        purpose="entry composition",
+        review_status=LayoutReviewStatus.usable,
+        selected_for_h3=True,
+    )
+    old_two = LayoutReference(
+        id="lref_bulk_two",
+        asset_id="lay_bulk_two",
+        job_id="job_bulk_two",
+        job_status="succeeded",
+        purpose="retort composition",
+        review_status=LayoutReviewStatus.pending_review,
+        selected_for_h3=True,
+    )
+    shot_one = Shot(
+        id="sht_bulk_one",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Greeting",
+        script_beat="beat",
+        duration_s=6,
+        status=ShotStatus.needs_review,
+        layout_refs=[old_one],
+        layout_asset_id=old_one.asset_id,
+        refs=[
+            {
+                "role": RefRole.layout_ref_frame,
+                "asset_id": old_one.asset_id,
+                "picture_index": 1,
+                "file_key": "layout",
+            }
+        ],
+    )
+    shot_two = Shot(
+        id="sht_bulk_two",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Retort",
+        script_beat="beat",
+        duration_s=10,
+        status=ShotStatus.needs_review,
+        layout_refs=[old_two],
+        layout_asset_id=old_two.asset_id,
+        refs=[
+            {
+                "role": RefRole.layout_ref_frame,
+                "asset_id": old_two.asset_id,
+                "picture_index": 1,
+                "file_key": "layout",
+            }
+        ],
+    )
+    save_shot(shot_one)
+    save_shot(shot_two)
+    save_project(project.model_copy(update={"shot_ids": [shot_one.id, shot_two.id]}))
+
+    class Svc:
+        async def queue_ref_frames(self, project_id, shot_ids=None, *, force=False):
+            current = load_shot(project.id, shot_one.id)
+            replacement = LayoutReference(
+                id="lref_bulk_one_new",
+                job_id="job_bulk_one_new",
+                job_status="queued",
+                purpose="entry composition",
+                activation_mode="replace",
+            )
+            updated = current.model_copy(
+                update={
+                    "layout_refs": [*current.layout_refs, replacement],
+                    "layout_asset_id": None,
+                    "ref_frame_job_id": replacement.job_id,
+                    "layout_review_status": None,
+                    "status": ShotStatus.ref_frame_pending,
+                }
+            )
+            save_shot(updated)
+            return [updated]
+
+    result = await handle_chat(
+        project_id=project.id,
+        message="reference frame all",
+        svc=Svc(),
+    )
+
+    assert "Queued 1 composition-reference job" in result.reply
+    assert [(image.shot_id, image.url) for image in result.images] == [
+        (shot_one.id, "/api/files/library/layouts/lay_bulk_one/layout.png"),
+        (shot_two.id, "/api/files/library/layouts/lay_bulk_two/layout.png"),
+    ]
 
 
 @pytest.mark.parametrize(

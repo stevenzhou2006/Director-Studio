@@ -193,6 +193,20 @@ def _unsupported_feature(
     )
     if not rejection:
         return None
+    # A server may reject a JSON schema only when images are attached ("SCHEMA on
+    # a request with images is not supported"). Dropping the schema is the valid
+    # fallback even though the error also mentions images, so check the explicit
+    # schema wording before the image/tool branches.
+    if has_format and any(
+        marker in text
+        for marker in (
+            "response_format",
+            "json_schema",
+            "schema",
+            "structured output",
+        )
+    ):
+        return "response_format"
     if has_images and any(
         marker in text
         for marker in ("image", "image_url", "vision", "multimodal")
@@ -200,16 +214,13 @@ def _unsupported_feature(
         return "vision"
     if has_tools and any(marker in text for marker in ("tool", "function")):
         return "tools"
-    if has_format and any(
-        marker in text
-        for marker in (
-            "response_format",
-            "json_schema",
-            "structured output",
-            "not implemented",
-        )
-    ):
-        return "response_format"
+    if "not implemented" in text:
+        if has_images:
+            return "vision"
+        if has_tools:
+            return "tools"
+        if has_format:
+            return "response_format"
     return None
 
 

@@ -195,6 +195,17 @@ Output rules:
   every shot. A generic noun alone is not sufficient — always say how the object is
   built and operated. If the action names a prop that has no prop Picture, describe
   it only as far as the approved metadata supports and never invent a mechanism.
+- Ground physical structure in the Pictures, not in prose. A ref's visual_lock (from
+  the Scene/vehicle Picture and the Actor Picture) is the primary evidence for what
+  physically exists and is more reliable than the Shot's authored camera_angle,
+  composition, shot_type, or script_beat, which can be stale after an asset change.
+  Never add, keep, or repeat a structure, enclosure, or object that the referenced
+  Picture does not visibly show. In particular, do not describe a vehicle cabin, cab,
+  roof, ceiling or roof lining, windshield, window glass, doors, or a circular
+  steering wheel unless the Scene/Layout Picture visibly shows it. When the reference
+  is an open frame or flatbed, describe it as open and say the cabin/glass/roof is
+  absent. If authored shot text names a structure the Picture does not show, follow
+  the Picture and omit the unsupported structure rather than copying the text.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.

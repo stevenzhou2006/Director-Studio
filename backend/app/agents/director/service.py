@@ -2105,6 +2105,62 @@ class DirectorService:
                     actor_visual_locks[asset_id] = cleaned
         meta["actor_visual_locks"] = actor_visual_locks
 
+        # Inspect each Scene reference so set and vehicle/object structure is
+        # grounded in pixels for THIS shot. Authored camera/composition prose can
+        # be stale after a scene asset is replaced, so the Picture wins: this lock
+        # records whether a vehicle is open or enclosed instead of trusting text.
+        scene_visual_locks = dict(meta.get("scene_visual_locks") or {})
+        if callable(complete_with_images):
+            from .vision import image_bytes_to_b64_jpeg as _encode_scene_image
+
+            for ref in sorted(shot.refs, key=lambda item: item.picture_index):
+                if ref.role != RefRole.scene:
+                    continue
+                asset_id = str(ref.asset_id or "")
+                if not asset_id or asset_id in scene_visual_locks:
+                    continue
+                kind = role_to_library_kind(ref.role.value)
+                asset = load_asset(kind, asset_id) if kind else None
+                if asset is None:
+                    continue
+                pair = _read_asset_image_bytes(
+                    asset, role="scene", file_key=ref.file_key
+                )
+                encoded = _encode_scene_image(pair[1]) if pair else None
+                if not encoded:
+                    continue
+                lock = await complete_with_images(
+                    (
+                        "Inspect one approved Scene reference image for a video "
+                        "prompt. Transcribe only what is visibly present: the set "
+                        "geometry and fixed landmarks, and the exact construction of "
+                        "any vehicle or large object — silhouette and proportions, "
+                        "open versus enclosed body, and whether it actually has a "
+                        "cab, roof, ceiling, windshield, window glass, or doors, the "
+                        "control type (handlebar grips versus a circular steering "
+                        "wheel), the number and arrangement of wheels or parts, and "
+                        "its colors and materials. State plainly when a feature is "
+                        "absent (for example 'open flatbed, no cabin, no glass, no "
+                        "roof'). Never invent, upgrade, or infer structure that is "
+                        "not visible. Ignore characters, wardrobe, and camera "
+                        "motion. Return one compact paragraph of checkable "
+                        "structural facts."
+                    ),
+                    (
+                        f"Scene: {asset.name}\n"
+                        f"Shot: {shot.title}\n"
+                        "Return the exact set and vehicle structure this Shot must "
+                        "keep. If it is an open frame or flatbed with no cabin or "
+                        "glass, say so explicitly."
+                    ),
+                    images=[encoded],
+                    guides=("scene-design", "background-continuity", "prop-continuity"),
+                )
+                cleaned = str(lock or "").strip()
+                if cleaned:
+                    scene_visual_locks[asset_id] = cleaned
+        meta["scene_visual_locks"] = scene_visual_locks
+
         prompt_refs: list[dict[str, Any]] = []
         for ref in sorted(shot.refs, key=lambda item: item.picture_index):
             kind = role_to_library_kind(ref.role.value)
@@ -2131,7 +2187,9 @@ class DirectorService:
                     "approved_description": approved_description,
                     "species": species,
                     "visual_lock": str(
-                        actor_visual_locks.get(str(ref.asset_id)) or ""
+                        actor_visual_locks.get(str(ref.asset_id))
+                        or scene_visual_locks.get(str(ref.asset_id))
+                        or ""
                     ),
                     "visual_analysis": str(
                         (

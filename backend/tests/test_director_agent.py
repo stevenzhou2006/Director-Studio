@@ -2611,6 +2611,99 @@ async def test_write_prompts_grounds_actor_wardrobe_with_a_visual_lock(director_
 
 
 @pytest.mark.asyncio
+async def test_write_prompts_grounds_scene_structure_with_a_visual_lock(director_dirs):
+    from PIL import Image
+
+    from app.agents.director.service import DirectorService
+    from app.core.projects.models import RefRole, ShotRef
+    from app.core.projects.store import save_project
+    from app.core.schemas import LibraryAsset
+
+    project = create_project("Scene lock", "The cat drives away.")
+    scene_dir = director_dirs["library"] / "scenes" / "scn_lock"
+    scene_dir.mkdir(parents=True)
+    Image.effect_noise((512, 512), 24).convert("RGB").save(scene_dir / "master.png")
+    scene_asset = LibraryAsset(
+        id="scn_lock",
+        kind="scenes",
+        name="tricycle",
+        notes="",
+        pipeline_id="scene",
+        job_id="job_scene",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"master": "master.png"},
+        meta={},
+    )
+    (scene_dir / "asset.json").write_text(
+        scene_asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    shot = Shot(
+        id="sht_scene_lock",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Drive away",
+        script_beat="The cat drives the tricycle away.",
+        duration_s=6,
+        refs=[
+            ShotRef(
+                role=RefRole.scene,
+                asset_id=scene_asset.id,
+                picture_index=1,
+                file_key="master",
+            )
+        ],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+    sections_json = json.dumps(
+        {
+            "subject_definitions": "The open flatbed tricycle in <Picture 1>.",
+            "summary": "The cat drives away.",
+            "retention_analysis": "Keep the vehicle reference.",
+            "detailed_description": "From 0-6 seconds, the cat drives away.",
+            "overall_soundscape": "Street tone.",
+            "non_diegetic_music": "None.",
+        }
+    )
+
+    class VisionPlanProvider(FakePlanProvider):
+        def __init__(self) -> None:
+            super().__init__(responses=[sections_json, sections_json])
+            self.visual_calls: list[tuple[str, list[str]]] = []
+
+        async def complete_with_images(
+            self,
+            system: str,
+            user: str,
+            *,
+            images: list[str],
+            guides: Iterable[str] = (),
+        ) -> str:
+            self.visual_calls.append((user, images))
+            if "Return the exact set and vehicle structure" in user:
+                return (
+                    "Open red flatbed tricycle with handlebar grips; "
+                    "no cabin, no glass, no roof."
+                )
+            return "Centered medium composition."
+
+    provider = VisionPlanProvider()
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+
+    updated = await svc.write_prompts_after_layout(shot.id)
+
+    assert updated.meta["scene_visual_locks"][scene_asset.id].startswith(
+        "Open red flatbed"
+    )
+    assert "Open red flatbed" in provider.calls[0].user
+    assert "no cabin" in provider.calls[0].user
+
+
+@pytest.mark.asyncio
 async def test_write_prompts_grounds_explicit_active_layout_set_and_stores_signature(
     director_dirs,
 ):

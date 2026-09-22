@@ -619,6 +619,26 @@ describe("Director shot actions", () => {
     });
   });
 
+  it("does not submit while an IME composition is active", async () => {
+    vi.mocked(chatWithDirectorStream).mockResolvedValue({
+      reply: "ok", actions: [], project: projectState.project!, shots: [testShot],
+      images: [], thinking: "", steps: [],
+    });
+    render(<DirectorPage />);
+    await screen.findByRole("heading", { name: "1. Corridor walk-in" });
+    const composer = screen.getByPlaceholderText(/Talk to the Director/);
+
+    fireEvent.change(composer, { target: { value: "hello" } });
+    fireEvent.compositionStart(composer);
+    fireEvent.keyDown(composer, { key: "Enter" });
+    fireEvent.keyDown(composer, { key: "Enter", isComposing: true });
+    expect(chatWithDirectorStream).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(composer);
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(chatWithDirectorStream).toHaveBeenCalledTimes(1));
+  });
+
   it("does not expose the retired Shot reference action", async () => {
     render(<DirectorPage />);
     await screen.findByRole("heading", { name: "1. Corridor walk-in" });

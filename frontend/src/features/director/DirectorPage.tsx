@@ -204,6 +204,7 @@ function DirectorAgentWorkspace({
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const composingRef = useRef(false);
   const seenLayouts = useRef<Set<string>>(new Set());
   const shotRevision = useRef(0);
   const handledRequestId = useRef<string | null>(null);
@@ -925,11 +926,21 @@ function DirectorAgentWorkspace({
                 : "Enter a project name, or paste a script to create a project…"
             }
             onChange={(e) => setDraft(e.target.value)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
+              if (e.key !== "Enter" || e.shiftKey) return;
+              // Enter confirms an active IME candidate (e.g. typing English
+              // words inside a Chinese IME); it must not submit the message.
+              if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+                return;
               }
+              e.preventDefault();
+              void send();
             }}
           />
           {chatActive ? (

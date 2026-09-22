@@ -54,4 +54,7 @@ class DirectorLLMPlanProvider:
             prompt,
             images=images,
             require_vision=True,
+            # Visual grounding must return only the checkable facts; reasoning
+            # blocks would otherwise be stored as the visual lock.
+            options={"enable_thinking": False},
         )

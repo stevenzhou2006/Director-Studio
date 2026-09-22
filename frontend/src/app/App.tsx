@@ -196,7 +196,7 @@ function AppShell() {
             <span className="dot" />
             <span className="health-label">ComfyUI</span>
           </div>
-          <button type="button" className="btn secondary topbar-settings" onClick={() => setDirectionOpen(true)}>Global direction</button>
+          <button type="button" className="btn secondary topbar-settings" onClick={() => setDirectionOpen(true)}>Project direction</button>
           <button type="button" className="btn secondary topbar-settings" aria-current={activePage === "settings" ? "page" : undefined} onClick={openSettings}>Settings</button>
         </div>
       </header>
@@ -206,17 +206,17 @@ function AppShell() {
           className="folder-modal"
           role="dialog"
           aria-modal="true"
-          aria-label="Global direction"
+          aria-label="Project direction"
           onClick={() => setDirectionOpen(false)}
         >
           <div className="folder-modal-panel" onClick={(event) => event.stopPropagation()}>
             <div className="folder-modal-head">
-              <h2 className="folder-modal-title">Global direction</h2>
+              <h2 className="folder-modal-title">Project direction</h2>
               <button type="button" className="btn secondary sm" onClick={() => setDirectionOpen(false)}>
                 Close
               </button>
             </div>
-            <GlobalPromptPanel />
+            <GlobalPromptPanel projectId={project?.id} />
           </div>
         </div>
       ) : null}

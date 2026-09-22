@@ -27,6 +27,11 @@ from pydantic import BaseModel, Field
 
 from ..agents.director import DirectorService
 from ..agents.director.llm_plan_provider import DirectorLLMPlanProvider
+from ..agents.director.service import (
+    _direction_forbids_enclosure,
+    _sanitize_open_vehicle_sections,
+    _shot_has_open_vehicle,
+)
 from ..agents.director.planner import role_to_library_kind
 from ..agents.director.reference_service import _actor_image_for_ref_frame
 from ..agents.director.skill_loader import with_director_skill
@@ -50,6 +55,7 @@ from ..core.media.concat import concatenate_project_shots
 from ..core.prompting import (
     effective_global_prompt,
     ensure_global_prompt_in_h3,
+    flatten_direction,
     load_app_global_negative,
     load_app_global_prompt,
     save_app_global_direction,
@@ -189,6 +195,7 @@ class UpdateProjectBody(BaseModel):
     script_text: str | None = None
     script_locked: bool | None = None
     global_prompt: str | None = None
+    global_negative: str | None = None
 
 
 class ExpandGlobalDirectionBody(BaseModel):
@@ -579,11 +586,47 @@ async def update_project_endpoint(
         updates["script_locked"] = body.script_locked
     if body.global_prompt is not None:
         updates["global_prompt"] = body.global_prompt.strip()
+    if body.global_negative is not None:
+        updates["global_negative"] = body.global_negative.strip()
     if not updates:
         return project
     project = project.model_copy(update=updates)
     save_project(project)
     return project
+
+
+@router.get("/projects/{project_id}/global-direction")
+async def get_project_global_direction(project_id: str) -> dict[str, str]:
+    """Read the project-scoped direction injected into every shot of this project."""
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    return {
+        "detail": flatten_direction(project.global_prompt or ""),
+        "negative": flatten_direction(project.global_negative or ""),
+    }
+
+
+@router.put("/projects/{project_id}/global-direction")
+async def put_project_global_direction(
+    project_id: str,
+    body: GlobalDirectionBody,
+) -> dict[str, str]:
+    """Persist the project-scoped direction for every shot of this project."""
+    project = load_project(project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    updates = {
+        "global_prompt": (body.detail or "").strip(),
+    }
+    if body.negative is not None:
+        updates["global_negative"] = (body.negative or "").strip()
+    project = project.model_copy(update=updates)
+    save_project(project)
+    return {
+        "detail": project.global_prompt,
+        "negative": project.global_negative,
+    }
 
 
 @router.post("/projects/{project_id}/global-prompt/expand")
@@ -2035,6 +2078,22 @@ async def submit_shot_endpoint(
                 503,
                 f"Prompt refresh for current layout failed: {e}",
             ) from e
+
+    # Heal a stale cached prompt so a direct re-run never re-submits enclosure
+    # wording for a visibly open vehicle or a project direction that forbids one
+    # (diffusion models render the noun, even inside a negation).
+    submit_direction = effective_global_prompt(shot.project_id)
+    if _shot_has_open_vehicle(shot, shot.meta or {}) or _direction_forbids_enclosure(
+        submit_direction
+    ):
+        cleaned_sections = _sanitize_open_vehicle_sections(
+            shot.prompt_sections,
+            open_vehicle=True,
+            exempt_text=submit_direction,
+        )
+        if cleaned_sections != shot.prompt_sections:
+            shot = shot.model_copy(update={"prompt_sections": cleaned_sections})
+            save_shot(shot)
 
     try:
         assert_h3_submittable(shot)

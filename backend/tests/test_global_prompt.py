@@ -6,10 +6,13 @@ from app.core.projects.models import PromptSections
 from app.core.projects.store import create_project, load_project, save_project
 from app.core.prompting import (
     append_global_prompt,
+    effective_global_negative,
     effective_global_prompt,
     ensure_global_prompt_in_h3,
     global_prompt_block,
     load_app_global_prompt,
+    load_app_global_negative,
+    save_app_global_direction,
     save_app_global_prompt,
 )
 
@@ -86,3 +89,25 @@ def test_effective_global_prompt_precedence(tmp_path, monkeypatch):
 
     # An explicit value always wins.
     assert effective_global_prompt(project.id, explicit="EXPLICIT") == "EXPLICIT"
+
+
+def test_effective_global_negative_precedence(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    monkeypatch.setattr(settings, "projects_dir", projects)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    assert effective_global_negative(None) == ""
+
+    save_app_global_direction(negative="APP NEGATIVE")
+    assert load_app_global_negative() == "APP NEGATIVE"
+    assert effective_global_negative(None) == "APP NEGATIVE"
+
+    project = create_project("Negative project", "script")
+    assert effective_global_negative(project.id) == "APP NEGATIVE"
+
+    saved = load_project(project.id)
+    assert saved is not None
+    save_project(saved.model_copy(update={"global_negative": "PROJECT NEGATIVE"}))
+    assert effective_global_negative(project.id) == "PROJECT NEGATIVE"
+    assert effective_global_negative(project.id, explicit="EXPLICIT") == "EXPLICIT"

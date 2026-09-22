@@ -96,14 +96,51 @@ def effective_global_negative(
     *,
     explicit: str | None = None,
 ) -> str:
-    """Resolve the active global negative (app-wide persisted value only)."""
+    """Resolve the active negative direction.
+
+    Precedence: explicit > per-project override > app-wide persisted value.
+    """
     if explicit is not None and explicit.strip():
         return explicit.strip()
+    if project_id:
+        try:
+            from .projects.store import load_project
+
+            project = load_project(project_id)
+        except Exception:
+            project = None
+        if project is not None and (project.global_negative or "").strip():
+            return flatten_direction(project.global_negative)
     persisted = load_app_global_negative()
     if persisted:
-        return persisted
+        return flatten_direction(persisted)
     return ""
 
+
+
+def flatten_direction(text: str) -> str:
+    """Unwrap a legacy JSON-array direction into plain prose.
+
+    Older saved directions are serialized as ``[{"id": ..., "text": ...}]``. The
+    model reads the flattened ``text`` fields, not the JSON wrapper.
+    """
+    raw = (text or "").strip()
+    if not raw.startswith("["):
+        return raw
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+    if not isinstance(data, list):
+        return raw
+    parts: list[str] = []
+    for item in data:
+        if isinstance(item, dict):
+            parts.append(str(item.get("text") or "").strip())
+        elif isinstance(item, str):
+            parts.append(item.strip())
+    joined = "\n".join(part for part in parts if part)
+    return joined or raw
 
 
 def effective_global_prompt(
@@ -117,7 +154,7 @@ def effective_global_prompt(
     ``DS_GLOBAL_PROMPT`` environment default.
     """
     if explicit is not None and explicit.strip():
-        return explicit.strip()
+        return flatten_direction(explicit)
     if project_id:
         try:
             from .projects.store import load_project
@@ -126,13 +163,13 @@ def effective_global_prompt(
         except Exception:
             project = None
         if project is not None and (project.global_prompt or "").strip():
-            return (project.global_prompt or "").strip()
+            return flatten_direction(project.global_prompt)
     persisted = load_app_global_prompt()
     if persisted:
-        return persisted
+        return flatten_direction(persisted)
     from ..config import settings
 
-    return (settings.global_prompt or "").strip()
+    return flatten_direction(settings.global_prompt or "")
 
 
 def global_prompt_block(global_prompt: str) -> str:

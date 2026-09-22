@@ -201,6 +201,9 @@ class Project(BaseModel):
     # Project-wide direction every shot must follow. Empty falls back to the
     # app-wide ``DS_GLOBAL_PROMPT`` default.
     global_prompt: str = ""
+    # Project-wide negative direction for image pipelines that support one.
+    # Empty falls back to the app-wide persisted negative.
+    global_negative: str = ""
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)

@@ -302,6 +302,50 @@ def test_app_global_direction_round_trips(client):
     }
 
 
+def test_project_global_direction_round_trips(client):
+    project = create_project("Project direction", "script")
+
+    assert client.get(f"/api/projects/{project.id}/global-direction").json() == {
+        "detail": "",
+        "negative": "",
+    }
+
+    saved = client.put(
+        f"/api/projects/{project.id}/global-direction",
+        json={
+            "detail": "  全露天开放式三轮车，握把式车把。  ",
+            "negative": "  glass windshield, enclosed cabin  ",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == {
+        "detail": "全露天开放式三轮车，握把式车把。",
+        "negative": "glass windshield, enclosed cabin",
+    }
+    assert client.get(f"/api/projects/{project.id}/global-direction").json() == {
+        "detail": "全露天开放式三轮车，握把式车把。",
+        "negative": "glass windshield, enclosed cabin",
+    }
+
+    from app.core.prompting import effective_global_negative, effective_global_prompt
+
+    assert effective_global_prompt(project.id) == "全露天开放式三轮车，握把式车把。"
+    assert effective_global_negative(project.id) == "glass windshield, enclosed cabin"
+
+
+def test_project_global_direction_requires_known_project(client):
+    assert (
+        client.get("/api/projects/prj_missing/global-direction").status_code == 404
+    )
+    assert (
+        client.put(
+            "/api/projects/prj_missing/global-direction",
+            json={"detail": "x", "negative": ""},
+        ).status_code
+        == 404
+    )
+
+
 def test_expand_app_global_direction_uses_director_llm(client):
     seen = _install_fake_complete(client, "Expanded app-wide direction.")
 

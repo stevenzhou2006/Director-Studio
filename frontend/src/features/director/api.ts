@@ -134,6 +134,54 @@ export async function saveGlobalDirection(
   };
 }
 
+/** Read the project-scoped direction applied to every shot of one project. */
+export async function getProjectDirection(
+  projectId: string,
+): Promise<GlobalDirection> {
+  const res = await fetch(`/api/projects/${projectId}/global-direction`);
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return {
+    detail: String(data?.detail ?? ""),
+    negative: String(data?.negative ?? ""),
+  };
+}
+
+/** Persist the project-scoped direction applied to every shot of one project. */
+export async function saveProjectDirection(
+  projectId: string,
+  detail: string,
+  negative: string,
+): Promise<GlobalDirection> {
+  const res = await fetch(`/api/projects/${projectId}/global-direction`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detail, negative }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return {
+    detail: String(data?.detail ?? ""),
+    negative: String(data?.negative ?? ""),
+  };
+}
+
+/** Expand a rough note into a detailed project direction via the Director LLM. */
+export async function expandProjectDirection(
+  projectId: string,
+  description: string,
+  current = "",
+): Promise<string> {
+  const res = await fetch(`/api/projects/${projectId}/global-prompt/expand`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description, current }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return String(data?.detail ?? "");
+}
+
 /** Read the app-wide global direction applied to every project. */
 export async function getGlobalPrompt(): Promise<string> {
   return (await getGlobalDirection()).detail;

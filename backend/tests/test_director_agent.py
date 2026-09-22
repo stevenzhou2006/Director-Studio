@@ -340,6 +340,8 @@ def director_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "projects_dir", projects)
     monkeypatch.setattr(settings, "jobs_dir", jobs)
     monkeypatch.setattr(settings, "library_root", library)
+    # Isolate the app-wide direction store so tests never read real user state.
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
     return {"projects": projects, "jobs": jobs, "library": library}
 
 
@@ -549,9 +551,9 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
     )
     h3_user = provider.calls[-1].user
     assert f"- shot_type: {CAMERA_DRAFT['shot_type']}" in h3_user
-    assert f"- camera_angle: {CAMERA_DRAFT['camera_angle']}" in h3_user
+    assert f"- camera_angle (provisional note; the referenced Pictures win if they disagree): {CAMERA_DRAFT['camera_angle']}" in h3_user
     assert f"- camera_motion: {CAMERA_DRAFT['camera_motion']}" in h3_user
-    assert f"- composition: {CAMERA_DRAFT['composition']}" in h3_user
+    assert f"- composition (provisional note; the referenced Pictures win if they disagree): {CAMERA_DRAFT['composition']}" in h3_user
 
 
 @pytest.mark.asyncio
@@ -2608,6 +2610,291 @@ async def test_write_prompts_grounds_actor_wardrobe_with_a_visual_lock(director_
     # Cached on the second pass; no extra vision calls.
     assert len(provider.visual_calls) == 2
     assert second.meta["actor_visual_locks"] == first.meta["actor_visual_locks"]
+
+
+def test_clean_visual_note_strips_reasoning_blocks():
+    from app.agents.director.service import _clean_visual_note
+
+    assert (
+        _clean_visual_note(
+            "<think>weigh the options</think>Open flatbed, no cabin, no glass."
+        )
+        == "Open flatbed, no cabin, no glass."
+    )
+    assert _clean_visual_note("<think>unclosed reasoning") == ""
+    assert _clean_visual_note("") == ""
+
+
+def test_open_vehicle_enclosure_terms_scopes_to_the_vehicle_clause():
+    from app.agents.director.service import _open_vehicle_enclosure_terms
+
+    flagged = _open_vehicle_enclosure_terms(
+        "The driver looks through the left side window at the open cab."
+    )
+    assert "cab" in flagged
+    assert "side window" in flagged
+    # A shop's window, glass, roof, and doors are not the vehicle.
+    assert (
+        _open_vehicle_enclosure_terms(
+            "A shop with glass doors and a red roof stands behind the cat."
+        )
+        == []
+    )
+    # Contextual terms are ignored outside a vehicle clause.
+    assert _open_vehicle_enclosure_terms("A roof above a window.") == []
+
+
+def test_neutralize_open_vehicle_text_rewrites_enclosure_nouns():
+    from app.agents.director.service import (
+        _neutralize_open_vehicle_text,
+        _open_vehicle_enclosure_terms,
+    )
+
+    collapsed = _neutralize_open_vehicle_text(
+        "The driver's area is completely open with NO cabin, NO roof, "
+        "NO windshield, NO side windows, NO glass, and NO doors."
+    )
+    assert _open_vehicle_enclosure_terms(collapsed) == []
+
+    assert (
+        _neutralize_open_vehicle_text(
+            "There is no glass or window frame obstructing the view."
+        )
+        == "There is an open structure obstructing the view."
+    )
+    assert (
+        _neutralize_open_vehicle_text("The cab has no steering wheel.")
+        == "open driver area has handlebar steering."
+    )
+    # A shop keeps its own glass, doors, and roof.
+    assert (
+        _neutralize_open_vehicle_text(
+            "A shop with glass doors and a red roof stands behind the cat."
+        )
+        == "A shop with glass doors and a red roof stands behind the cat."
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_prompts_sanitizes_enclosure_wording_for_an_open_vehicle(
+    director_dirs,
+):
+    from PIL import Image
+
+    from app.agents.director.service import (
+        DirectorService,
+        _open_vehicle_enclosure_terms,
+    )
+    from app.core.projects.models import RefRole, ShotRef
+    from app.core.projects.store import save_project
+    from app.core.schemas import LibraryAsset
+
+    project = create_project("Open vehicle guard", "The cat drives away.")
+    scene_dir = director_dirs["library"] / "scenes" / "scn_open"
+    scene_dir.mkdir(parents=True)
+    Image.effect_noise((512, 512), 24).convert("RGB").save(scene_dir / "master.png")
+    scene_asset = LibraryAsset(
+        id="scn_open",
+        kind="scenes",
+        name="tricycle",
+        notes="",
+        pipeline_id="scene",
+        job_id="job_scene",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"master": "master.png"},
+        meta={},
+    )
+    (scene_dir / "asset.json").write_text(
+        scene_asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    shot = Shot(
+        id="sht_open_guard",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Drive away",
+        script_beat="The cat drives the tricycle away.",
+        duration_s=6,
+        refs=[
+            ShotRef(
+                role=RefRole.scene,
+                asset_id=scene_asset.id,
+                picture_index=1,
+                file_key="master",
+            )
+        ],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    def sections(detailed: str) -> str:
+        return json.dumps(
+            {
+                "subject_definitions": "The open flatbed tricycle in <Picture 1>.",
+                "summary": "The cat drives away.",
+                "retention_analysis": "Keep the vehicle reference.",
+                "detailed_description": detailed,
+                "overall_soundscape": "Street tone.",
+                "non_diegetic_music": "None.",
+            }
+        )
+
+    bad_json = sections(
+        "The driver sits in the open cabin, looking through the side window."
+    )
+
+    class VisionPlanProvider(FakePlanProvider):
+        def __init__(self) -> None:
+            super().__init__(responses=[bad_json])
+
+        async def complete_with_images(
+            self,
+            system: str,
+            user: str,
+            *,
+            images: list[str],
+            guides: Iterable[str] = (),
+        ) -> str:
+            if "Return the exact set and vehicle structure" in user:
+                return "Open red flatbed tricycle; no cabin, no glass, no roof."
+            return "Centered medium composition."
+
+    provider = VisionPlanProvider()
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+
+    updated = await svc.write_prompts_after_layout(shot.id)
+
+    # Sanitized deterministically on the first pass; no repair round needed.
+    assert len(provider.calls) == 1
+    detailed = updated.prompt_sections.detailed_description
+    assert "open cabin" not in detailed
+    assert "side window" not in detailed
+    assert _open_vehicle_enclosure_terms(
+        updated.prompt_sections.as_ordered_text()
+    ) == []
+
+
+def test_direction_forbids_enclosure_detection():
+    from app.agents.director.service import _direction_forbids_enclosure
+
+    assert _direction_forbids_enclosure(
+        "三轮车必须为全露天开放式结构，严禁安装任何顶棚、遮阳篷、玻璃窗、挡风板或封闭式车厢。"
+    )
+    assert _direction_forbids_enclosure(
+        "No glass windshield, no enclosed cabin, handlebar controls only."
+    )
+    assert not _direction_forbids_enclosure("Cinematic teal and amber grade.")
+    assert not _direction_forbids_enclosure("")
+
+
+@pytest.mark.asyncio
+async def test_write_prompts_honors_project_direction_enclosure_ban(director_dirs):
+    from PIL import Image
+
+    from app.agents.director.service import (
+        DirectorService,
+        _open_vehicle_enclosure_terms,
+    )
+    from app.core.projects.models import RefRole, ShotRef
+    from app.core.projects.store import save_project
+    from app.core.schemas import LibraryAsset
+
+    project = create_project("Direction guard", "The cat drives away.")
+    scene_dir = director_dirs["library"] / "scenes" / "scn_dir"
+    scene_dir.mkdir(parents=True)
+    Image.effect_noise((512, 512), 24).convert("RGB").save(scene_dir / "master.png")
+    scene_asset = LibraryAsset(
+        id="scn_dir",
+        kind="scenes",
+        name="tricycle",
+        notes="",
+        pipeline_id="scene",
+        job_id="job_scene",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"master": "master.png"},
+        meta={},
+    )
+    (scene_dir / "asset.json").write_text(
+        scene_asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    shot = Shot(
+        id="sht_dir_guard",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Drive away",
+        script_beat="The cat drives the tricycle away.",
+        duration_s=6,
+        refs=[
+            ShotRef(
+                role=RefRole.scene,
+                asset_id=scene_asset.id,
+                picture_index=1,
+                file_key="master",
+            )
+        ],
+    )
+    save_shot(shot)
+    save_project(
+        project.model_copy(
+            update={
+                "shot_ids": [shot.id],
+                "global_prompt": (
+                    "三轮车必须为全露天开放式结构，严禁安装任何顶棚、遮阳篷、"
+                    "玻璃窗、挡风板或封闭式车厢。"
+                ),
+            }
+        )
+    )
+
+    bad_json = json.dumps(
+        {
+            "subject_definitions": "The flatbed tricycle in <Picture 1>.",
+            "summary": "The cat drives away.",
+            "retention_analysis": "Keep the vehicle reference.",
+            "detailed_description": (
+                "The driver sits in the cab, looking through the windshield."
+            ),
+            "overall_soundscape": "Street tone.",
+            "non_diegetic_music": "None.",
+        }
+    )
+
+    class VisionPlanProvider(FakePlanProvider):
+        def __init__(self) -> None:
+            super().__init__(responses=[bad_json])
+
+        async def complete_with_images(
+            self,
+            system: str,
+            user: str,
+            *,
+            images: list[str],
+            guides: Iterable[str] = (),
+        ) -> str:
+            if "Return the exact set and vehicle structure" in user:
+                # No explicit open-vehicle signal: only the direction forbids it.
+                return "Red flatbed tricycle with handlebar grips."
+            return "Centered medium composition."
+
+    provider = VisionPlanProvider()
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+
+    updated = await svc.write_prompts_after_layout(shot.id)
+
+    assert len(provider.calls) == 1
+    detailed = updated.prompt_sections.detailed_description
+    assert "cab" not in detailed
+    assert "windshield" not in detailed
+    assert _open_vehicle_enclosure_terms(
+        updated.prompt_sections.as_ordered_text()
+    ) == []
 
 
 @pytest.mark.asyncio

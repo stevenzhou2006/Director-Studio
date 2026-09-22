@@ -42,9 +42,13 @@ drift is one of the most visible continuity failures.
 - The Scene Picture owns the real structure: walls, openings, and especially any
   vehicle or large object. A ref's `visual_lock` records what is visibly there.
 - Never describe a feature the Picture does not show. Do not add a cabin, cab, roof,
-  ceiling or roof lining, windshield, window glass, or doors to a vehicle that is
-  visibly an open frame or flatbed; do not add a steering wheel to a handlebar
-  vehicle. If the reference is open, write it as open and say what is absent.
+  ceiling or roof lining, windshield, window, window frame, side window, glass, doors,
+  or pillars to a vehicle that is visibly an open frame or flatbed, and do not add a
+  steering wheel to a handlebar vehicle. If the reference is open, describe only the
+  parts that are present and where the opening is — for example "through the open
+  left side of the vehicle" rather than "through the left side window". Do not name
+  an absent feature even to negate it: diffusion models render the noun, so "no
+  cabin", "no glass", or "no window frame" still primes a cabin.
 - Authored shot text (`camera_angle`, `composition`, `shot_type`, `script_beat`) is
   not evidence. It can be stale after a scene asset is replaced, so when it names a
   structure the Picture does not show, follow the Picture and omit the structure.

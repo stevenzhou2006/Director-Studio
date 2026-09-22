@@ -316,6 +316,242 @@ def _actor_appearance_and_species(asset: LibraryAsset) -> tuple[str, str]:
     return actor_prompt_identity(asset.meta or {})
 
 
+_THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
+_OPEN_THINK_RE = re.compile(r"<think(?:ing)?>[\s\S]*$", re.IGNORECASE)
+
+
+def _clean_visual_note(text: str) -> str:
+    """Strip chain-of-thought so stored visual locks stay checkable facts."""
+    cleaned = _THINK_BLOCK_RE.sub("", text or "")
+    cleaned = _OPEN_THINK_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+# A Scene/Layout lock that visibly establishes an open driver area. These are the
+# reliable "open vehicle" signals; a flatbed alone is NOT one, because a cabbed
+# cargo tricycle can also carry a flatbed.
+_OPEN_VEHICLE_RE = re.compile(
+    r"(?:"
+    r"\bno\s+(?:cabin|cab|roof|windshield|glass|windows?|doors?)\b"
+    r"|\bwithout\s+(?:a\s+)?(?:cabin|roof|windshield|glass)\b"
+    r"|\bopen[\s-]+(?:driver|frame|top|side)\b"
+    r"|无(?:玻璃|驾驶室|车顶|挡风|车厢)"
+    r"|没有(?:驾驶室|车顶|玻璃|挡风|车厢)"
+    r"|敞(?:篷|开)"
+    r"|顶部敞开"
+    r"|开放式(?:驾驶|车身|车斗)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Enclosure words that unambiguously describe a vehicle body and therefore must
+# never appear once the reference vehicle is visibly open.
+_ENCLOSURE_ALWAYS_RE = re.compile(
+    r"\b(?:cabin|cab|windshield|roof\s+lining|side\s+windows?|window\s+frame|"
+    r"steering\s+wheel|glass\s+roof|enclosed\s+(?:cab|cabin|roof|body))\b",
+    re.IGNORECASE,
+)
+# Ambiguous enclosure words (a shop can legitimately own a window, door, roof, or
+# glass). Flag these only inside a clause that is about the vehicle.
+_ENCLOSURE_CONTEXT_RE = re.compile(
+    r"\b(?:ceiling|windows?|glass|roof|doors?|pillars?)\b",
+    re.IGNORECASE,
+)
+_VEHICLE_CONTEXT_RE = re.compile(
+    r"\b(?:vehicle|truck|tricycle|three[\s-]wheel(?:ed)?|driver|handlebar|"
+    r"flatbed|cargo|motorcycle|sidecar)\b",
+    re.IGNORECASE,
+)
+
+
+def _open_vehicle_enclosure_terms(text: str) -> list[str]:
+    """Return enclosure terms that contradict a visibly open vehicle."""
+    found = {match.group(0).lower() for match in _ENCLOSURE_ALWAYS_RE.finditer(text)}
+    for clause in re.split(r"[.;!?\n]+", text):
+        if _VEHICLE_CONTEXT_RE.search(clause):
+            found.update(
+                match.group(0).lower()
+                for match in _ENCLOSURE_CONTEXT_RE.finditer(clause)
+            )
+    return sorted(found)
+
+
+def _shot_has_open_vehicle(shot: Shot, meta: dict[str, Any]) -> bool:
+    """True when a Scene/Layout visual lock establishes an open driver area."""
+    texts: list[str] = []
+    scene_locks = meta.get("scene_visual_locks") or {}
+    for ref in shot.refs:
+        if ref.role != RefRole.scene:
+            continue
+        lock = scene_locks.get(str(ref.asset_id))
+        if lock:
+            texts.append(_clean_visual_note(str(lock)))
+    layout_analyses = meta.get("layout_visual_analyses") or {}
+    for layout in shot.layout_refs:
+        if not layout.selected_for_h3:
+            continue
+        entry = layout_analyses.get(str(layout.asset_id)) or {}
+        analysis = entry.get("analysis") if isinstance(entry, dict) else None
+        if analysis:
+            texts.append(_clean_visual_note(str(analysis)))
+    return any(_OPEN_VEHICLE_RE.search(text) for text in texts)
+
+
+# A project/global direction that forbids an enclosed vehicle body is just as
+# authoritative as a visual lock: the shot prompt must not contradict it.
+_DIRECTION_FORBIDS_ENCLOSURE_RE = re.compile(
+    r"(?:"
+    r"(?:严禁|禁止|不得|不可|不许|避免|杜绝|不需要|不使用|不安装|不加|不要|无|没有|不带)"
+    r"[^。；\n]{0,24}"
+    r"(?:顶棚|遮阳篷|车顶|天窗|车窗|玻璃|挡风|车厢|驾驶室|驾驶舱|车门|窗框|立柱|封闭|方向盘)"
+    r"|\b(?:no|without|must\s+not|do\s+not|don'?t|never|avoid|forbid(?:den)?)\b"
+    r"[^.;\n]{0,40}"
+    r"\b(?:cabin|cab|roof|windshield|windows?|glass|doors?|pillars?|"
+    r"steering\s+wheel|enclosed)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _direction_forbids_enclosure(direction: str) -> bool:
+    """True when the project direction forbids an enclosed vehicle body."""
+    return bool(_DIRECTION_FORBIDS_ENCLOSURE_RE.search(direction or ""))
+
+
+# Clauses that are explicitly about the background/set rather than the vehicle
+# are not rewritten, so a shop may keep its own windows, doors, or glass.
+_BACKGROUND_CLAUSE_RE = re.compile(
+    r"\b(?:storefronts?|shops?|stores?|buildings?|facades?|walls?|streets?|"
+    r"sidewalks?|shutters?|backgrounds?)\b|店铺|街|墙|背景",
+    re.IGNORECASE,
+)
+
+# One enclosure noun; used to consume full "no cabin, no roof, ... and no doors"
+# enumerations including the repeated connective.
+_ENCLOSURE_NOUN = (
+    r"(?:roof\s+lining|window\s+glass|window\s+frame|side\s+windows?|"
+    r"steering\s+wheel|cabin|cab|roof|ceiling|windshield|windows?|glass|doors?)"
+)
+_NEGATED_ENCLOSURE_RE = re.compile(
+    rf"\b(?:no|without(?:\s+a)?)\s+{_ENCLOSURE_NOUN}\b"
+    rf"(?:\s*,?\s*(?:and\s+|or\s+)?(?:no\s+|without(?:\s+a)?\s+)?{_ENCLOSURE_NOUN}\b)*",
+    re.IGNORECASE,
+)
+
+# Applied before the term rewrites so "no glass" never becomes "no open framing".
+_OPEN_VEHICLE_NEGATION_REWRITES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\(?\bno\s+steering\s+wheel\b\)?", re.IGNORECASE), "handlebar steering"),
+    (re.compile(r"\bnot\s+a\s+(?:circular\s+)?steering\s+wheel\b", re.IGNORECASE), "handlebar steering"),
+    (re.compile(r"\(?\bno\s+glass\s*/\s*cabin\b\)?", re.IGNORECASE), "open to the air"),
+    (re.compile(r"(?:绝不是|不是|绝非|严禁使用|绝不使用|绝对不用)\s*圆形?\s*方向盘"), "车把式握把"),
+    (re.compile(r"(?:无|没有|不带)(?:车窗玻璃|透明挡风|挡风玻璃|玻璃|车窗|车顶|挡风|驾驶室|驾驶舱|车门|方向盘|封闭|遮挡)"), "开放"),
+]
+
+_OPEN_VEHICLE_TERM_REWRITES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bopen\s+(?:left|right)[\s-]*(?:side\s+)?window\s+frame\b", re.IGNORECASE), "open side"),
+    (re.compile(r"\b(?:left|right)[\s-]*open\s+(?:side\s+)?window\b", re.IGNORECASE), "open side"),
+    (re.compile(r"\bopen\s+(?:left|right)[\s-]*side\s+window\b", re.IGNORECASE), "open side"),
+    (re.compile(r"\bthe\s+['\"]?window['\"]?\s+is\s+(?:simply\s+|just\s+)?the\s+open\s+space\b", re.IGNORECASE), "the open space"),
+    (re.compile(r"\bwindow\s+glass\b", re.IGNORECASE), "open framing"),
+    (re.compile(r"\b(?:metal\s+|vertical\s+|wooden\s+|round\s+)?window\s+frame\b", re.IGNORECASE), "frame"),
+    (re.compile(r"\b(?:metal\s+|vertical\s+|wooden\s+)?pillars?\b", re.IGNORECASE), "frame"),
+    (re.compile(r"\b(?:driver'?s?\s+cab\s+interior|cab\s+interior|driver'?s?\s+cab|open\s+cab|cab\s+roof|a\s+cab|the\s+cab|cabin|cab)\b", re.IGNORECASE), "open driver area"),
+    (re.compile(r"\broof\s+lining\b", re.IGNORECASE), "open top"),
+    (re.compile(r"\bwindshields?\b", re.IGNORECASE), "open front"),
+    (re.compile(r"\bside\s+windows?\b", re.IGNORECASE), "open sides"),
+    (re.compile(r"\bwindows?\b", re.IGNORECASE), "side opening"),
+    (re.compile(r"\bglass\b", re.IGNORECASE), "open framing"),
+    (re.compile(r"\bceilings?\b", re.IGNORECASE), "open top"),
+    (re.compile(r"\broofs?\b", re.IGNORECASE), "open top"),
+    (re.compile(r"\bdoors?\b", re.IGNORECASE), "open entry"),
+    (re.compile(r"\benclosed\b", re.IGNORECASE), "open"),
+    (re.compile(r"带驾驶室"), "开放式"),
+    (re.compile(r"驾驶舱内饰|驾驶舱|驾驶室"), "驾驶位"),
+    (re.compile(r"车顶内衬|车顶"), "开放顶部"),
+    (re.compile(r"挡风玻璃|透明挡风|挡风"), "前部开放"),
+    (re.compile(r"左侧开放侧窗|右侧开放侧窗|开放侧窗"), "开放侧"),
+    (re.compile(r"窗洞"), "开口"),
+    (re.compile(r"侧窗|车窗"), "侧边开口"),
+    (re.compile(r"金属窗框|窗框"), "金属框架"),
+    (re.compile(r"车窗玻璃|玻璃"), "开放"),
+    (re.compile(r"立柱"), "支杆"),
+    (re.compile(r"车门"), "开放入口"),
+    (re.compile(r"方向盘"), "车把"),
+    (re.compile(r"封闭"), "开放"),
+]
+
+
+def _neutralize_open_vehicle_clause(clause: str) -> str:
+    text = clause
+    for pattern, replacement in _OPEN_VEHICLE_NEGATION_REWRITES:
+        text = pattern.sub(replacement, text)
+    text = _NEGATED_ENCLOSURE_RE.sub("an open structure", text)
+    for pattern, replacement in _OPEN_VEHICLE_TERM_REWRITES:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _neutralize_open_vehicle_text(text: str) -> str:
+    """Rewrite enclosure wording into open-vehicle wording.
+
+    Diffusion/video models condition on nouns, not negations, so even "no cabin"
+    primes a cabin. Negations are collapsed and enclosure nouns are replaced with
+    the visible open structure instead of being forbidden.
+    """
+    parts = re.split(r"([,;.!?\n]+)", text or "")
+    for index in range(0, len(parts), 2):
+        clause = parts[index]
+        if not clause or _BACKGROUND_CLAUSE_RE.search(clause):
+            continue
+        parts[index] = _neutralize_open_vehicle_clause(clause)
+    result = re.sub(r"[ \t]{2,}", " ", "".join(parts))
+    return re.sub(r"开放([、,，])\s*开放", "开放", result)
+
+
+def _sanitize_open_vehicle_sections(
+    sections: PromptSections,
+    *,
+    open_vehicle: bool,
+    exempt_text: str = "",
+) -> PromptSections:
+    """Rewrite enclosure wording in every section; keep GLOBAL DIRECTION verbatim."""
+    if not open_vehicle:
+        return sections
+    sentinel = "\u0000GLOBAL_DIRECTION\u0000"
+    updates: dict[str, str] = {}
+    for field in PromptSections.model_fields:
+        original = getattr(sections, field) or ""
+        protected = original.replace(exempt_text, sentinel) if exempt_text else original
+        cleaned = _neutralize_open_vehicle_text(protected)
+        if exempt_text:
+            cleaned = cleaned.replace(sentinel, exempt_text)
+        updates[field] = cleaned
+    return sections.model_copy(update=updates)
+
+
+def _validate_open_vehicle_prompt(
+    sections: PromptSections,
+    *,
+    open_vehicle: bool,
+    exempt_text: str = "",
+) -> None:
+    """Safety net: reject any enclosure wording sanitization could not rewrite."""
+    if not open_vehicle:
+        return
+    text = sections.as_ordered_text()
+    if exempt_text:
+        text = text.replace(exempt_text, " ")
+    terms = _open_vehicle_enclosure_terms(text)
+    if not terms:
+        return
+    raise ValueError(
+        "open-vehicle reference still has un-rewritable enclosure wording: "
+        + ", ".join(terms)
+        + ". Describe only the parts the Picture shows and where the driver area "
+        "is open (for example 'through the open left side of the vehicle')."
+    )
+
+
 class DirectorService:
     """Orchestrates plan → context save → reference-frame jobs → prompt rewrite."""
 
@@ -1403,6 +1639,13 @@ class DirectorService:
             "- If any clothing wording later in this prompt conflicts with a reference "
             "image, the reference image wins."
         )
+        lines.append(
+            "- Exception: the GLOBAL DIRECTION later in this prompt is mandatory and "
+            "overrides every reference image wherever it explicitly specifies a change "
+            "to the set, vehicle, prop, or a character's state (for example an empty "
+            "cargo bed or a specific license plate). Apply those changes even when a "
+            "reference image shows the previous state."
+        )
         return "\n".join(lines)
 
     def _gpt_generation_prompt(self, brief: GptLayoutBrief) -> str:
@@ -2051,7 +2294,7 @@ class DirectorService:
                     images=[encoded],
                     guides=("h3-prompt-writing",),
                 )
-                cleaned = str(analysis or "").strip()
+                cleaned = _clean_visual_note(str(analysis or ""))
                 if cleaned:
                     layout_visual_analyses[asset_id] = {"analysis": cleaned}
         meta["layout_visual_analyses"] = layout_visual_analyses
@@ -2100,7 +2343,7 @@ class DirectorService:
                     images=[encoded],
                     guides=("character-continuity",),
                 )
-                cleaned = str(lock or "").strip()
+                cleaned = _clean_visual_note(str(lock or ""))
                 if cleaned:
                     actor_visual_locks[asset_id] = cleaned
         meta["actor_visual_locks"] = actor_visual_locks
@@ -2156,7 +2399,7 @@ class DirectorService:
                     images=[encoded],
                     guides=("scene-design", "background-continuity", "prop-continuity"),
                 )
-                cleaned = str(lock or "").strip()
+                cleaned = _clean_visual_note(str(lock or ""))
                 if cleaned:
                     scene_visual_locks[asset_id] = cleaned
         meta["scene_visual_locks"] = scene_visual_locks
@@ -2186,16 +2429,20 @@ class DirectorService:
                     "approved_notes": asset.notes if asset else "",
                     "approved_description": approved_description,
                     "species": species,
-                    "visual_lock": str(
-                        actor_visual_locks.get(str(ref.asset_id))
-                        or scene_visual_locks.get(str(ref.asset_id))
-                        or ""
+                    "visual_lock": _clean_visual_note(
+                        str(
+                            actor_visual_locks.get(str(ref.asset_id))
+                            or scene_visual_locks.get(str(ref.asset_id))
+                            or ""
+                        )
                     ),
-                    "visual_analysis": str(
-                        (
-                            layout_visual_analyses.get(ref.asset_id) or {}
-                        ).get("analysis")
-                        or ""
+                    "visual_analysis": _clean_visual_note(
+                        str(
+                            (
+                                layout_visual_analyses.get(ref.asset_id) or {}
+                            ).get("analysis")
+                            or ""
+                        )
                     ),
                 }
             )
@@ -2231,28 +2478,38 @@ class DirectorService:
             )
         voice_refs_json = json.dumps(prompt_voice_refs, ensure_ascii=False)
 
+        global_prompt = effective_global_prompt(shot.project_id)
+        open_vehicle = _shot_has_open_vehicle(shot, meta) or _direction_forbids_enclosure(
+            global_prompt
+        )
+
+        def _hint(value: str) -> str:
+            # Authored notes often describe a cab/window even when the Picture is
+            # an open frame; strip those nouns before the LLM can copy them.
+            return _neutralize_open_vehicle_text(value) if open_vehicle else value
+
         keep = bool(getattr(settings, "llm_keep_loaded", True))
         async with self.orchestrator.llm_session(release_on_exit=not keep):
             await self.orchestrator.ensure_llm_ready()
             user = prompt_text.PROMPT_SECTIONS_USER_TEMPLATE.format(
                 title=shot.title,
                 scene_id=shot.scene_id,
-                script_beat=shot.script_beat,
-                shot_type=shot.shot_type,
-                camera_angle=shot.camera_angle,
+                script_beat=_hint(shot.script_beat),
+                shot_type=_hint(shot.shot_type),
+                camera_angle=_hint(shot.camera_angle),
                 camera_motion=shot.camera_motion,
-                composition=shot.composition,
+                composition=_hint(shot.composition),
                 duration_s=shot.duration_s,
                 dialogue_json=json.dumps(shot.dialogue),
+                # refs keep their authoritative visual_lock verbatim; the output
+                # sanitizer removes any negation the writer copies from it.
                 refs_json=refs_json,
-                selected_layouts_json=selected_layouts_json,
+                selected_layouts_json=_hint(selected_layouts_json),
                 voice_refs_json=voice_refs_json,
                 layout_asset_id=selected_layout_asset_id,
                 feedback=shot.feedback or "",
-                context_json=context_json,
-                global_prompt_block=global_prompt_block(
-                    effective_global_prompt(shot.project_id)
-                ),
+                context_json=_hint(context_json),
+                global_prompt_block=global_prompt_block(global_prompt),
             )
             raw = await self.plan_provider.complete(
                 prompt_text.H3_PROMPT_INSTRUCTIONS,
@@ -2270,6 +2527,11 @@ class DirectorService:
 
             def parse_and_validate(value: str) -> PromptSections:
                 parsed = PromptSections(**parse_prompt_sections_json(value))
+                parsed = _sanitize_open_vehicle_sections(
+                    parsed,
+                    open_vehicle=open_vehicle,
+                    exempt_text=global_prompt,
+                )
                 parsed = _apply_source_audio_contract(parsed, shot)
                 ordered_text = parsed.as_ordered_text()
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
@@ -2280,6 +2542,11 @@ class DirectorService:
                         ref.picture_index for ref in shot.refs
                     ),
                     require_all_submitted=True,
+                )
+                _validate_open_vehicle_prompt(
+                    parsed,
+                    open_vehicle=open_vehicle,
+                    exempt_text=global_prompt,
                 )
                 return parsed
 

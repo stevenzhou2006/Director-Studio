@@ -603,7 +603,7 @@ API: `/api/actors/*` · `GET /api/pipelines`
 | `DS_LLM_API_KEY` | empty | Optional credential for the active OpenAI-compatible endpoint |
 | `DS_LLM_TIMEOUT_SEC` | `600` | LLM request timeout in seconds |
 | `DS_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama for Director |
-| `DS_GLOBAL_PROMPT` | empty | Fallback default for the app-wide global direction; the value edited in the UI (`data/global_direction.json`) overrides it, and a per-project direction overrides both |
+| `DS_GLOBAL_PROMPT` | empty | Fallback default for the direction injected into every shot; the project-scoped direction edited in the UI (`Project direction`, stored on the project) overrides it, and the app-wide value (`data/global_direction.json`) overrides the env default |
 | `DS_H3_MINIMAX_API_KEY` | empty | MiniMax API credential; enables the official API option in H3 provider selectors |
 | `DS_H3_MINIMAX_MODEL` | `MiniMax-H3` | MiniMax H3 API model |
 | `DS_H3_MINIMAX_RESOLUTION` | `768P` | Requested MiniMax API output resolution |

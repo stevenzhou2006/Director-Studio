@@ -198,14 +198,18 @@ Output rules:
 - Ground physical structure in the Pictures, not in prose. A ref's visual_lock (from
   the Scene/vehicle Picture and the Actor Picture) is the primary evidence for what
   physically exists and is more reliable than the Shot's authored camera_angle,
-  composition, shot_type, or script_beat, which can be stale after an asset change.
-  Never add, keep, or repeat a structure, enclosure, or object that the referenced
-  Picture does not visibly show. In particular, do not describe a vehicle cabin, cab,
-  roof, ceiling or roof lining, windshield, window glass, doors, or a circular
-  steering wheel unless the Scene/Layout Picture visibly shows it. When the reference
-  is an open frame or flatbed, describe it as open and say the cabin/glass/roof is
-  absent. If authored shot text names a structure the Picture does not show, follow
-  the Picture and omit the unsupported structure rather than copying the text.
+  composition, shot_type, or script_beat, which are provisional notes and can be
+  stale after an asset change. Never add, keep, or repeat a structure, enclosure, or
+  object that the referenced Picture does not visibly show. If the Scene/Layout
+  Picture shows an open vehicle (open frame or flatbed with an open driver area),
+  then the six sections must not contain the words cabin, cab, roof, ceiling, roof
+  lining, windshield, window, window frame, side window, glass, door, or pillar for
+  that vehicle or its driver area, even if camera_angle/composition use them. Do not
+  name an absent feature even to negate it: never write "no cabin", "no glass", "the
+  cabin is absent", or "window frame". Describe only the parts the Picture shows and
+  where the opening is, for example "through the open left side of the vehicle".
+  Follow the Picture and rewrite the conflicting phrase rather than copying the
+  authored text.
 - Express all action timing as seconds (for example, "0–2 seconds"); never label
   second ranges as frames or write ambiguous ranges such as "Frame 0–2". Every
   interval must stay inside duration_s, and its stated length must match its endpoints.
@@ -219,6 +223,12 @@ Output rules:
   six-section structure, exact dialogue, and required <Picture N>/<Audio N> bindings
   intact. Include its text verbatim once in subject_definitions so the submitted
   prompt records the direction.
+- The GLOBAL DIRECTION is authoritative. When it forbids a structure (for example
+  "no canopy, no glass windows, no windshield, no enclosed cabin, no roof, no
+  steering wheel"), the produced sections must not describe, add, or keep that
+  structure anywhere, and must not contradict the direction even if the authored
+  camera_angle, composition, script_beat, or a visual_lock suggests it. Resolve every
+  conflict in favor of the GLOBAL DIRECTION and describe only what remains.
 """
 
 # Backward-compatible name used by existing Director integrations.
@@ -229,9 +239,9 @@ PROMPT_SECTIONS_USER_TEMPLATE = """Shot:
 - scene_id: {scene_id}
 - script_beat: {script_beat}
 - shot_type: {shot_type}
-- camera_angle: {camera_angle}
+- camera_angle (provisional note; the referenced Pictures win if they disagree): {camera_angle}
 - camera_motion: {camera_motion}
-- composition: {composition}
+- composition (provisional note; the referenced Pictures win if they disagree): {composition}
 - duration_s: {duration_s}
 - dialogue: {dialogue_json}
 - refs (picture order): {refs_json}

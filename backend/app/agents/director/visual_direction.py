@@ -269,9 +269,12 @@ def _analysis_prompt(
     if (global_prompt or "").strip():
         global_block = (
             f"{global_prompt_block(global_prompt)}\n"
-            "This global direction is mandatory for the project; honor it in the "
-            "composition, style, and generation_prompt without contradicting the "
-            "reference responsibilities above.\n\n"
+            "This global direction is mandatory for the project and outranks the "
+            "reference images wherever it explicitly specifies a change to the set, "
+            "vehicle, prop, or character (for example an empty cargo bed or a specific "
+            "license plate). Apply every such change in generation_prompt even when an "
+            "attachment shows the previous state, and do not name an ImageN as the "
+            "authority for a detail the global direction changes.\n\n"
         )
     return (
         f"{global_block}"
@@ -317,7 +320,10 @@ def _analysis_prompt(
         "roof, windshield, window glass, door, or steering wheel that the attachment does "
         "not show; if the attachment shows an open frame, describe an open frame. In "
         "generation_prompt, name the scene ImageN as the authority for that object's exact "
-        "structure and state it must be reproduced unchanged. "
+        "structure and state it must be reproduced unchanged, UNLESS the GLOBAL DIRECTION "
+        "explicitly changes that structure, state, or detail (for example an empty cargo "
+        "bed or a specific license plate), in which case the global direction wins and "
+        "generation_prompt must state the changed value instead. "
         "If a CHARACTER caption marks the subject as an animal or quadruped, keep that "
         "subject species-accurate on all fours with no human face or hands, and never add "
         "or substitute a person who is not attached as a reference. "

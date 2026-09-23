@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("director_studio.vram")
 
 Owner = Literal["llm", "comfy"] | None
-GenerationKind = Literal["image", "video"]
+GenerationKind = Literal["image", "video", "audio"]
 GenerationPhase = Literal["queued", "uploading", "generating", "saving"]
 
 

@@ -217,6 +217,120 @@ CHAT_IMAGE_CLASSIFICATION_TOOL = function_tool(
     required=["image_index", "kind", "name", "notes", "confidence"],
 )
 
+SPEECH_TOOL = function_tool(
+    "generate_tts_audio",
+    (
+        "Generate speech or recitation audio through the local ComfyUI Qwen3-TTS "
+        "service. Use it for poem recitation, narration, dialect voice-over, or any "
+        "audio the production needs. style='longchang-girl' is the verified "
+        "四川隆昌小女孩 dialect recipe and REQUIRES respell pairs taken from the "
+        "poem's own characters (e.g. '长=藏,深=森,知=资'); style='eric' uses the "
+        "native Sichuan CustomVoice speaker; style='custom' uses your own instruct. "
+        "lead_silence_s prepends silence for an H3 mouth-sync reference. The audio "
+        "is saved as a Voice asset in this project's library."
+    ),
+    {
+        "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact text to speak; omit punctuation you do not want read.",
+        },
+        "name": {"type": "string", "description": "Voice asset name."},
+        "style": {
+            "type": "string",
+            "enum": ["longchang-girl", "eric", "custom"],
+            "default": "longchang-girl",
+        },
+        "respell": {
+            "type": "string",
+            "description": (
+                "Comma-separated 翘舌→平舌 character respellings from this poem, "
+                "e.g. '长=藏,深=森,知=资'. Required for a real 隆昌 accent; at "
+                "least three pairs."
+            ),
+        },
+        "emotion": {"type": "string"},
+        "rhyme": {"type": "string"},
+        "age": {"type": "string"},
+        "speaker": {
+            "type": "string",
+            "description": "CustomVoice speaker when style='eric' (default Eric).",
+        },
+        "instruct": {
+            "type": "string",
+            "description": "Full voice-design instruction when style='custom'.",
+        },
+        "seed": {"type": "integer"},
+        "lead_silence_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "description": "Seconds of silence prepended for H3 mouth-sync.",
+        },
+        "model_choice": {
+            "type": "string",
+            "enum": ["0.6B", "1.7B", "3B"],
+            "default": "1.7B",
+        },
+        "save_to_library": {"type": "boolean", "default": True},
+    },
+    required=["text"],
+)
+
+POEM_OVERLAY_TOOL = function_tool(
+    "overlay_poem_subtitles",
+    (
+        "Burn an elegant title card and traditional vertical calligraphy poem "
+        "columns onto an existing video with ffmpeg (CPU only, no GPU). Each column "
+        "fades in exactly when its line starts. Provide source_shot_id (resolves the "
+        "newest succeeded H3 clip) or source_job_id, plus title, author, and the "
+        "ordered lines with their start seconds. Get start_s from ASR word "
+        "timestamps on the recitation audio; never guess them. Returns the rendered "
+        "video URL and host path."
+    ),
+    {
+        "source_shot_id": {"type": "string", "description": "Shot whose clip is overlaid."},
+        "source_job_id": {
+            "type": "string",
+            "description": "A succeeded project job with a video/video_raw output.",
+        },
+        "source_version": {
+            "type": "string",
+            "description": "latest, or vN when several H3 generations exist.",
+        },
+        "output_kind": {"type": "string", "enum": ["enhanced", "raw"]},
+        "title": {"type": "string", "minLength": 1},
+        "author": {"type": "string", "minLength": 1},
+        "dynasty": {"type": "string", "default": "唐"},
+        "seal": {
+            "type": "string",
+            "description": "Single-character red seal, default 狸.",
+        },
+        "lines": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "minLength": 1},
+                    "start_s": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Seconds when this line starts.",
+                    },
+                },
+                "required": ["text", "start_s"],
+                "additionalProperties": False,
+            },
+        },
+        "output_name": {"type": "string"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+    },
+    required=["title", "author", "lines"],
+)
+
+
 DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ACTOR_DESIGN_TOOL,
     ACTOR_ACCEPT_TOOL,
@@ -453,6 +567,8 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         dict(SHOT_SELECTOR),
     ),
     function_tool("get_status", "Read the current project and shot status."),
+    SPEECH_TOOL,
+    POEM_OVERLAY_TOOL,
 ]
 
 
@@ -523,6 +639,20 @@ def director_chat_guides(
         current_message
     ):
         guides.append("reference-frame-generation")
+    message = current_message or ""
+    if re.search(
+        r"(?:tts|text[\s-]?to[\s-]?speech|\bspeech\b|语音|配音|朗读|吟诵|方言|口音|"
+        r"隆昌|四川话|旁白|narration|voice[\s-]?over)",
+        message,
+        re.IGNORECASE,
+    ):
+        guides.append("audio-generation")
+    if re.search(
+        r"(?:书法|字幕|竖排|竖列|题诗|唐诗|古诗|poem|calligraph|subtitle|overlay|题字)",
+        message,
+        re.IGNORECASE,
+    ):
+        guides.append("poem-subtitle-overlay")
     if include_visual_qc:
         guides.append("visual-qc")
     return tuple(guides)

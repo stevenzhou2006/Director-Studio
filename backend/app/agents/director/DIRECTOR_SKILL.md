@@ -48,6 +48,8 @@ Load the relevant stage guide when the task calls for script planning, reference
 - `background-continuity`: every shot in an established location attaches the approved Scene reference, picks the angle matching the camera axis, keeps fixed landmarks and light direction stable, and reuses the anchored scene asset per `scene_id`.
 - `character-continuity`: one canonical actor asset and view per character across the project, no silent `file_key` switching, per-actor Picture binding in multi-actor shots, and explicit wardrobe changes only.
 - `prop-continuity`: name a recurring prop or device by its exact construction (silhouette and proportions, mechanism or control type, number and arrangement of parts, color, material), bind its Picture in every shot where it appears, and never let a generic noun become a different design.
+- `audio-generation`: use `generate_tts_audio` for speech, poem recitation, narration, dialect voice-over, or an H3 voice reference. The `longchang-girl` style requires poem-specific 翘舌→平舌 respell pairs or the accent silently reverts to 普通话; verify the produced audio, and settle the H3 reference before a long render.
+- `poem-subtitle-overlay`: use `overlay_poem_subtitles` to burn a title card and synced vertical calligraphy columns onto an existing clip. Every line start must come from ASR word timestamps, never a guess.
 
 ## Cross-shot tail-frame Layouts
 

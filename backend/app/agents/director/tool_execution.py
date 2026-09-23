@@ -49,6 +49,7 @@ from .planner import ShotRefsPatchSubmission, StoryboardSubmission
 from .service import DirectorService
 from .tool_schema import IMAGE_TOOLS, STORYBOARD_TOOLS
 from .tool_handlers.actor import handle_actor_tool
+from .tool_handlers.audio import handle_audio_tool
 from .tool_handlers.layout import handle_layout_tool
 from .tool_handlers.library import handle_library_tool
 from .tool_handlers.media import handle_media_tool
@@ -209,6 +210,17 @@ async def execute_tools(
                 actions=actions,
                 notes=notes,
                 touched=touched,
+                result_payloads=result_payloads,
+                images=images,
+            ):
+                continue
+            if await handle_audio_tool(
+                name=name,
+                args=args,
+                project_id=project_id,
+                runtime=runtime,
+                actions=actions,
+                notes=notes,
                 result_payloads=result_payloads,
                 images=images,
             ):

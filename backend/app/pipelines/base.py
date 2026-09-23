@@ -88,7 +88,7 @@ class Pipeline(_PipelineCommon, ABC):
     # All local ComfyUI workflows use the MCP transport. External providers
     # (GPT Bridge, MiniMax cloud API) declare their own adapters separately.
     execution_adapter_id = "comfy_mcp"
-    generation_kind: Literal["image", "video"] = "image"
+    generation_kind: Literal["image", "video", "audio"] = "image"
 
     @abstractmethod
     def build_prompt(

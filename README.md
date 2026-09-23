@@ -4,7 +4,7 @@ Local-first pre-production workspace for planning shots, managing reusable visua
 
 Director Studio runs the planning Agent through one configured Ollama, LM Studio, or OpenAI-compatible provider. Image and local video workflows run in ComfyUI through ComfyUI MCP; H3 video can alternatively be submitted to the official MiniMax API.
 
-Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, and exclusive local-LLM/ComfyUI VRAM coordination.
+Core features include a typed asset library, actor and set workflows, conversational shot planning, editable Picture and Audio references, optional Layout studies, six-section H3 prompts, local/cloud video submission, durable jobs, ComfyUI Qwen3-TTS speech, and ffmpeg vertical calligraphy poem subtitles, with exclusive local-LLM/ComfyUI VRAM coordination.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and extension points.
 
@@ -14,7 +14,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source layout and exten
 |-------|------|
 | Backend | FastAPI · pluggable pipelines · ComfyUI MCP · provider-neutral Director LLM |
 | Frontend | Vite + React · feature folders |
-| Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3) · MiniMax H3 official API |
+| Execution | ComfyUI through MCP (actor / scene / prop / Layout / local H3 / Qwen3-TTS) · ffmpeg poem overlay · MiniMax H3 official API |
 | Planning LLM | Ollama · LM Studio · OpenAI-compatible Chat Completions |
 
 ## Platform support
@@ -230,12 +230,21 @@ Director Studio currently uses five ComfyUI workflow graphs:
 | Purpose | Workflow file | Notes |
 |---|---|---|
 | Actor assets | `qwen_actor_asset_workbench.api.json` | Character master and three-view outputs |
-| Scene assets | `QwenEdit2511_MultiAngle_SceneRef.api.json` | Multi-angle scene generation |
+| Scene assets | `QwenEdit2511_MultiAngle_SceneRef.api.json` | Multi-angle scene generation (Qwen-Edit-2511 + multiple-angles LoRA) |
 | Prop assets | `qwen_prop_master.api.json` | Prop master generation |
 | Layout reference | `ref_frame_layout.api.json` | Optional shot-composition Picture reference |
 | Local H3 video | `h3_ref2va.api.json` | API branch of the official Comfy-Org H3 Ref2AV template |
 
 The workflow JSON files are bundled with the application, but their model files and custom-node dependencies must also be available in the user's ComfyUI installation.
+
+## Speech and poem subtitles
+
+Two optional capabilities extend the Director beyond stills and H3 video:
+
+- **Speech (`tts` pipeline)** — Qwen3-TTS through the same ComfyUI MCP transport, exposed to the Director as `generate_tts_audio`. It supports the verified 四川隆昌小女孩 dialect recitation (`style=longchang-girl`, which requires poem-specific 翘舌→平舌 respell pairs), the native Sichuan `CustomVoice` speaker (`style=eric`), and free-form voice design (`style=custom`). Output is saved as a Voice asset; `lead_silence_s` prepends silence for an H3 mouth-sync reference. No bundled workflow JSON is required — the graph is built programmatically against the real nodes `FB_Qwen3TTSVoiceDesign` / `FB_Qwen3TTSCustomVoice`.
+- **Poem subtitle overlay (`poem_overlay` pipeline)** — `overlay_poem_subtitles` burns a title card and synced vertical calligraphy columns onto an existing clip with ffmpeg (CPU only, no GPU). It scales a 576×1024 reference design to the source and needs Ma Shan Zheng (vendored) plus a CJK serif font.
+
+The Director loads focused guidance for these on demand (`audio-generation` and `poem-subtitle-overlay` stage guides) when the chat message is about speech, dialect, narration, poems, or subtitles.
 
 ## Custom ComfyUI workflows
 
@@ -565,7 +574,7 @@ API: `/api/projects/*` · pipelines: `GET /api/pipelines` · health: `GET /api/h
 backend/app/
   core/           # jobs, library, comfy, projects, h3, vram
   agents/         # Director planning, casting, reference selection, prompts
-  pipelines/      # actor, scene, prop, ref_frame, h3_ref2va
+  pipelines/      # actor, scene, prop, ref_frame, h3_ref2va, tts, poem_overlay
   api/            # health, files, pipelines, projects
 frontend/src/
   app/            # shell + nav

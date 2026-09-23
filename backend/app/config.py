@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     job_timeout_sec: float = 1800.0
     max_upload_mb: int = 20
 
+    # Poem subtitle overlay fonts. Empty = auto-detect (vendored Ma Shan Zheng
+    # calligraphy font + Noto Serif CJK on the host).
+    poem_calligraphy_font: str = ""
+    poem_serif_font: str = ""
+
     # App-wide global direction appended to every generation prompt (H3 video,
     # Layout/reference frames, and asset pipelines). A project's own
     # ``global_prompt`` overrides this default. Empty means no injection.

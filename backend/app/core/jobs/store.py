@@ -140,7 +140,10 @@ def save_input_file(
     project_id: str | None = None,
 ) -> Path:
     ext = Path(filename).suffix.lower() or ".png"
-    if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".wav", ".mp3", ".flac", ".m4a"}:
+    if ext not in {
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".wav", ".mp3", ".flac",
+        ".m4a", ".ogg", ".mp4", ".webm", ".mov", ".mkv",
+    }:
         ext = ".png"
     d = job_dir(job_id, project_id=project_id)
     (d / "inputs").mkdir(parents=True, exist_ok=True)

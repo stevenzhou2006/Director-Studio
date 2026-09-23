@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ...core.prompting import append_global_prompt, effective_global_prompt
 from ...core.schemas import ComfyImageRef, JobRecord
 from ..base import Pipeline
-from . import workflow
+from . import panel_align, workflow
 
 
 class ActorPipeline(Pipeline):
@@ -131,8 +132,18 @@ class ActorPipeline(Pipeline):
         return ["actor", "wardrobe"]
 
     def postprocess_job_outputs(self, job: JobRecord, saved: dict[str, Any]) -> None:
-        """No multipanel hair paste — hair is text-driven; bust is already a crop."""
-        return None
+        """Align a quadruped turnaround so every view shares height and baseline."""
+        species, _ = workflow.resolve_actor_identity(job.params or {})
+        if species != workflow.SPECIES_QUADRUPED:
+            return
+        fullbody = saved.get("fullbody_threeview")
+        bust = saved.get("bust_threeview")
+        asset = saved.get("asset_sheet")
+        if not (fullbody and bust and asset):
+            return
+        panel_align.normalize_turnaround(
+            Path(fullbody), Path(bust), Path(asset)
+        )
 
     def library_meta(self, job: JobRecord) -> dict[str, Any]:
         species, description = workflow.resolve_actor_identity(job.params or {})

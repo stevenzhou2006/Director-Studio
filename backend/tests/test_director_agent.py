@@ -177,6 +177,27 @@ def _seed_actor_asset(library_root: Path, asset_id: str = "act_testasset01") -> 
     return asset
 
 
+def _seed_quadruped_actor_asset(
+    library_root: Path, asset_id: str = "act_testcat0001"
+) -> LibraryAsset:
+    adir = library_root / "actors" / asset_id
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "master.png").write_bytes(b"fake-png-bytes")
+    asset = LibraryAsset(
+        id=asset_id,
+        kind="actors",
+        name="Test Cat",
+        notes="quadruped hero",
+        pipeline_id="actor",
+        job_id="job_seed",
+        created_at="2026-01-01T00:00:00+00:00",
+        files={"master": "master.png"},
+        meta={"tags": ["cat"], "species": "quadruped"},
+    )
+    (adir / "asset.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
+    return asset
+
+
 def _seed_scene_asset(library_root: Path, asset_id: str = "scn_testscene01") -> LibraryAsset:
     adir = library_root / "scenes" / asset_id
     adir.mkdir(parents=True, exist_ok=True)
@@ -1787,6 +1808,55 @@ def test_reference_authority_prefix_makes_actor_wardrobe_authoritative(director_
     assert "Image1 is the sole authority" in prefix
     assert "bare animal coat" in prefix
     assert "the reference image wins" in prefix
+
+
+def test_reference_authority_prefix_uses_short_block_for_quadruped(director_dirs):
+    from app.agents.director.service import DirectorService
+
+    actor = _seed_quadruped_actor_asset(director_dirs["library"])
+    svc = DirectorService(plan_provider=object(), orchestrator=object())
+
+    prefix = svc._reference_authority_prefix(
+        [
+            LayoutSourceRef(
+                role=RefRole.actor,
+                asset_id=actor.id,
+                file_key="master",
+                notes="P1 Test Cat",
+            )
+        ]
+    )
+
+    assert "REFERENCE AUTHORITY" in prefix
+    assert "natural animal on all fours" in prefix
+    assert "Image1 is Test Cat" in prefix
+    # The verbose portrait/wardrobe block must not leak onto animals.
+    assert "facial/face proportions" not in prefix
+    assert "is the sole authority" not in prefix
+    assert "the reference image wins" not in prefix
+
+
+def test_reference_authority_prefix_keeps_human_block_when_mixed(director_dirs):
+    from app.agents.director.service import DirectorService
+
+    human = _seed_actor_asset(director_dirs["library"])
+    cat = _seed_quadruped_actor_asset(director_dirs["library"])
+    svc = DirectorService(plan_provider=object(), orchestrator=object())
+
+    prefix = svc._reference_authority_prefix(
+        [
+            LayoutSourceRef(role=RefRole.actor, asset_id=human.id, file_key="master"),
+            LayoutSourceRef(role=RefRole.actor, asset_id=cat.id, file_key="master"),
+        ]
+    )
+
+    # Human actor keeps the authoritative wardrobe wording.
+    assert "Image1 is the authoritative character reference for Test Actor" in prefix
+    assert "is the sole authority for Test Actor's wardrobe" in prefix
+    assert "the reference image wins" in prefix
+    # Animal actor gets the short, non-anthropomorphic block.
+    assert "natural animal on all fours" in prefix
+    assert "Image2 is Test Cat" in prefix
 
 
 def test_reference_authority_prefix_is_empty_without_actor_sources(director_dirs):

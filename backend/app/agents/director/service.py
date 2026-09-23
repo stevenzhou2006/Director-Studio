@@ -1593,7 +1593,14 @@ class DirectorService:
         reference (for example dressing a bare cat in a robe). Prefixing every
         generation prompt with this block makes the reference image the final
         authority so invented clothing cannot override what the Asset shows.
+
+        Human-wardrobe wording is only emitted for human actors. Applying that
+        verbose, portrait-style block to a non-human (quadruped) actor pushes the
+        image model toward rendering an invented person, so animals get a short,
+        species-aware block instead.
         """
+        from ...pipelines.actor.workflow import SPECIES_QUADRUPED
+
         def _slot(source: LayoutSourceRef, position: int) -> int:
             return source.image_index if source.image_index is not None else position
 
@@ -1605,16 +1612,30 @@ class DirectorService:
         if not actor_sources:
             return ""
 
+        loaded = []
+        for index, source in actor_sources:
+            asset = self._load_layout_source_asset(source)
+            _appearance, species = _actor_appearance_and_species(asset)
+            loaded.append((index, asset, species))
+        has_human = any(species != SPECIES_QUADRUPED for _i, _a, species in loaded)
+
         costume_images = [
             f"Image{_slot(source, index)}"
             for index, source in enumerate(source_refs, start=1)
             if source.role == RefRole.costume
         ]
         lines = ["REFERENCE AUTHORITY - follow this before the shot request:"]
-        for index, source in actor_sources:
-            asset = self._load_layout_source_asset(source)
+        for index, asset, species in loaded:
             image = f"Image{index}"
             name = (asset.name or asset.id).strip()
+            if species == SPECIES_QUADRUPED:
+                lines.append(
+                    f"- {image} is {name}; keep them exactly as shown: same "
+                    "species, face, fur colour and markings. Keep them as a "
+                    "natural animal on all fours. Do not add any other being to "
+                    "the frame, and do not add or change any clothing or accessory."
+                )
+                continue
             lines.append(
                 f"- {image} is the authoritative character reference for {name}; "
                 "preserve the same exact person or animal, including facial/face "
@@ -1637,17 +1658,18 @@ class DirectorService:
                     "robes, uniforms, armor, boots, collars, or accessories that are not "
                     "visible in the image."
                 )
-        lines.append(
-            "- If any clothing wording later in this prompt conflicts with a reference "
-            "image, the reference image wins."
-        )
-        lines.append(
-            "- Exception: the GLOBAL DIRECTION later in this prompt is mandatory and "
-            "overrides every reference image wherever it explicitly specifies a change "
-            "to the set, vehicle, prop, or a character's state (for example an empty "
-            "cargo bed or a specific license plate). Apply those changes even when a "
-            "reference image shows the previous state."
-        )
+        if has_human:
+            lines.append(
+                "- If any clothing wording later in this prompt conflicts with a reference "
+                "image, the reference image wins."
+            )
+            lines.append(
+                "- Exception: the GLOBAL DIRECTION later in this prompt is mandatory and "
+                "overrides every reference image wherever it explicitly specifies a change "
+                "to the set, vehicle, prop, or a character's state (for example an empty "
+                "cargo bed or a specific license plate). Apply those changes even when a "
+                "reference image shows the previous state."
+            )
         return "\n".join(lines)
 
     def _gpt_generation_prompt(self, brief: GptLayoutBrief) -> str:

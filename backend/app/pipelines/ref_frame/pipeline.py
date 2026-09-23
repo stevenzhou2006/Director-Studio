@@ -67,7 +67,7 @@ class RefFramePipeline(Pipeline):
                     "description": workflow.NODE_DESCRIPTION,
                     "sampler": workflow.NODE_SAMPLER,
                     "save": workflow.NODE_SAVE,
-                    "ref_image_0": workflow.NODE_REF_IMAGE_0,
+                    "ref_image_0": workflow.NODE_REF_IMAGE_1,
                 },
             }
         )

@@ -132,7 +132,7 @@ Job runner calls `before_comfy_job` for **all** Comfy pipelines under exclusive 
 | Pipeline id | Role | Notes |
 |-------------|------|--------|
 | `actor` | Casting workbench | Auto-route by uploads |
-| `scene` | Multi-angle set design | `QwenEdit2511_MultiAngle_SceneRef` |
+| `scene` | Multi-angle set design | Qwen-Edit-2511 + multiple-angles LoRA (`QwenEdit2511_MultiAngle_SceneRef`) |
 | `first_frame` | Layout still for a shot | Library asset; **not** I2V socket |
 | `h3_ref2va` | Production video | Pure `MiniMaxH3ReferenceToVideo`; max 9 refs; 15 steps / `res_multistep` / `beta` |
 
@@ -165,7 +165,7 @@ frontend/src/
 
 ## Scene multi-angle (Set Design)
 
-Workflow: `QwenEdit2511_MultiAngle_SceneRef.api.json`
+Workflow: `QwenEdit2511_MultiAngle_SceneRef.api.json` (Qwen-Edit-2511 `TextEncodeQwenImageEditPlus` + multiple-angles LoRA)
 
 | Input | Role |
 |-------|------|

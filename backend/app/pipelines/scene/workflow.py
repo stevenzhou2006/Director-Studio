@@ -40,9 +40,19 @@ DEFAULT_PREPEND = (
     "and time of day. Only change the camera. Do not redesign the set."
 )
 
-_H_RE = re.compile(r"horizontal:\s*(-?\d+(?:\.\d+)?)", re.I)
-_V_RE = re.compile(r"vertical:\s*(-?\d+(?:\.\d+)?)", re.I)
-_Z_RE = re.compile(r"zoom:\s*(-?\d+(?:\.\d+)?)", re.I)
+# Used instead of DEFAULT_PREPEND when the reference plate is an isolated subject
+# (transparent or flat white) — see pipelines/scene/background.py.
+ISOLATED_PREPEND = (
+    "Keep the subject exactly the same as the reference image. Replace the "
+    "background with a completely plain, uniform, pure white seamless studio "
+    "background. No environment, no scenery, no floor, no horizon, no walls, "
+    "no sky, no props, no other objects, and no cast shadow. Only change the "
+    "camera viewpoint."
+)
+
+_H_RE = re.compile(r"horizontal:\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_V_RE = re.compile(r"vertical:\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_Z_RE = re.compile(r"zoom:\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 def workflow_path():

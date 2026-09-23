@@ -1174,6 +1174,7 @@ code {
   max-height: min(92vh, calc(100dvh - 4.5rem));
   object-fit: contain;
   border-radius: 10px;
+  background: repeating-conic-gradient(#171d26 0% 25%, #0d1117 0% 50%) 50% / 22px 22px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
@@ -2137,7 +2138,7 @@ h2 {
 
 .output-card-body {
   aspect-ratio: 3 / 4;
-  background: #0a0d11;
+  background: repeating-conic-gradient(#171d26 0% 25%, #0d1117 0% 50%) 50% / 18px 18px;
   position: relative;
 }
 
@@ -2529,7 +2530,7 @@ h2 {
   max-height: calc(100vh - 140px);
   object-fit: contain;
   border-radius: 8px;
-  background: #000;
+  background: repeating-conic-gradient(#171d26 0% 25%, #0d1117 0% 50%) 50% / 22px 22px;
 }
 
 .lightbox-nav {

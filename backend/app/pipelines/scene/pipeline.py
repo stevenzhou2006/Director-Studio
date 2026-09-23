@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from ...core.prompting import append_global_prompt, effective_global_prompt
+from ...core.paths import find_job_dir
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
-from . import workflow
+from . import background, workflow
 
 
 class ScenePipeline(Pipeline):
@@ -87,6 +88,25 @@ class ScenePipeline(Pipeline):
         )
         return base
 
+    def _scene_input_path(self, job: JobRecord) -> Path | None:
+        directory = find_job_dir(job.id)
+        if directory is None:
+            return None
+        inputs = directory / "inputs"
+        if not inputs.is_dir():
+            return None
+        for path in sorted(inputs.iterdir()):
+            if path.is_file() and path.stem == "scene":
+                return path
+        return None
+
+    def prepare_job_submission(self, job: JobRecord) -> None:
+        """Flag isolated-subject plates so every angle stays backgroundless."""
+        path = self._scene_input_path(job)
+        if path is None:
+            return
+        job.params["backgroundless"] = background.has_no_background(path)
+
     def build_prompt(
         self,
         job: JobRecord,
@@ -97,14 +117,16 @@ class ScenePipeline(Pipeline):
         if not scene:
             raise ValueError("scene reference image is required")
         p = job.params
-        append_text = append_global_prompt(
-            p.get("append_text") or "", effective_global_prompt(job.project_id)
-        )
+        if p.get("backgroundless"):
+            prepend_text = workflow.ISOLATED_PREPEND
+        else:
+            prepend_text = p.get("prepend_text") or ""
+        append_text = p.get("append_text") or ""
         prompt, seed, used, stems = workflow.build_scene_prompt(
             scene_image_name=scene,
             scene_name=job.name or "",
             angle_prompts=p.get("angle_prompts") or workflow.DEFAULT_ANGLES,
-            prepend_text=p.get("prepend_text") or "",
+            prepend_text=prepend_text,
             append_text=append_text,
             start_index=int(p.get("start_index") or 0),
             max_rows=p.get("max_rows"),
@@ -115,6 +137,15 @@ class ScenePipeline(Pipeline):
         job.params["output_stems"] = stems
         job.params["scene_name_slug"] = workflow.scene_name_slug(job.name or "")
         return prompt, seed
+
+    def postprocess_job_outputs(self, job: JobRecord, saved: dict[str, Any]) -> None:
+        """Keep every angle backgroundless when the reference plate had none."""
+        if not (job.params or {}).get("backgroundless"):
+            return
+        for path in saved.values():
+            candidate = Path(path)
+            if candidate.suffix.lower() == ".png":
+                background.cut_out_background(candidate)
 
     def map_history_outputs(
         self,

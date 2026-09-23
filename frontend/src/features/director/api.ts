@@ -7,6 +7,7 @@ import type {
   ProjectMode,
   Shot,
   ShotRef,
+  ShotVoiceRef,
 } from "../../shared/api/types";
 import type { DirectorVramStatus } from "./generationStatus";
 
@@ -508,6 +509,19 @@ export async function replaceShotMaterials(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ materials }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function updateShotVoiceRefs(
+  shotId: string,
+  voiceRefs: ShotVoiceRef[],
+): Promise<Shot> {
+  const res = await fetch(`/api/shots/${shotId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voice_refs: voiceRefs }),
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();

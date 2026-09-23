@@ -7,9 +7,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...core.library.audio import probe_audio
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
 from . import workflow
+
+_H3_REF_MIN_S = 2.0
+_H3_REF_MAX_S = 15.0
 
 
 class TtsPipeline(Pipeline):
@@ -145,6 +149,19 @@ class TtsPipeline(Pipeline):
         file_keys = [
             key for key in ("audio", "audio_padded") if key in job.outputs
         ] or ["audio"]
+        # The H3 mouth-sync reference is the padded take when present, else raw.
+        h3_file_key = "audio_padded" if "audio_padded" in job.outputs else "audio"
+        h3_slot = job.outputs.get(h3_file_key)
+        duration_s: float | None = None
+        if h3_slot and h3_slot.path:
+            try:
+                duration_s = probe_audio(Path(h3_slot.path)).duration_s
+            except (OSError, ValueError):
+                duration_s = None
+        h3_ready = bool(
+            duration_s is not None
+            and _H3_REF_MIN_S <= duration_s <= _H3_REF_MAX_S
+        )
         return save_asset_from_job(
             job,
             name=name,
@@ -158,6 +175,9 @@ class TtsPipeline(Pipeline):
                 "instruct": params.get("instruct"),
                 "lead_silence_s": params.get("lead_silence_s"),
                 "warnings": params.get("warnings") or [],
+                "duration_s": duration_s,
+                "h3_ready": h3_ready,
+                "h3_file_key": h3_file_key,
             },
             project_id=resolved,
         )

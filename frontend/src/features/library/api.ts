@@ -1,4 +1,5 @@
 import { parseError } from "../../shared/api/client";
+import type { Shot } from "../../shared/api/types";
 
 export type LibraryKind =
   | "actors"
@@ -80,6 +81,38 @@ export async function updateLibraryAsset(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(metadata),
     },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getProjectShots(projectId: string): Promise<Shot[]> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  const detail = (await res.json()) as { shots?: Shot[] };
+  return detail.shots ?? [];
+}
+
+export async function attachVoiceToShot(
+  shotId: string,
+  body: { asset_id: string; file_key?: string; speaker?: string },
+): Promise<Shot> {
+  const res = await fetch(`/api/shots/${encodeURIComponent(shotId)}/voice-refs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_key: "audio", speaker: "", ...body }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function detachVoiceFromShot(
+  shotId: string,
+  assetId: string,
+): Promise<Shot> {
+  const res = await fetch(
+    `/api/shots/${encodeURIComponent(shotId)}/voice-refs/${encodeURIComponent(assetId)}`,
+    { method: "DELETE" },
   );
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();

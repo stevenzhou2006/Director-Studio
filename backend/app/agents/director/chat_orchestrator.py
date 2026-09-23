@@ -413,7 +413,7 @@ Recommended pipeline; use judgment to decide when to advance:
 8) write_prompt — generate or rewrite the six H3 sections after a reference frame exists; no approval step is required
 9) H3 video generation happens later in Production
 10) concatenate_shots — once every Shot has a succeeded H3 clip, assemble the finished clips in Shot order into one file with ffmpeg and report the absolute host path it returns
-11) generate_tts_audio — generate speech or recitation audio through ComfyUI Qwen3-TTS. For the Sichuan Longchang dialect recitation use style="longchang-girl" with character-level retroflex-to-flat respell pairs drawn from the poem's own characters (at least three); style="eric" is the native Sichuan CustomVoice speaker and style="custom" takes your own instruct. Pass lead_silence_s when the audio will be an H3 mouth-sync reference. The result is a Voice asset in this project's library
+ 11) generate_tts_audio — generate speech or recitation audio through ComfyUI Qwen3-TTS. For the Sichuan Longchang dialect recitation use style="longchang-girl" with character-level retroflex-to-flat respell pairs drawn from the poem's own characters (at least three); style="eric" is the native Sichuan CustomVoice speaker and style="custom" takes your own instruct. Pass lead_silence_s when the audio will be an H3 mouth-sync reference. ALWAYS pass shot_id (or shot_index/title) for the Shot the line is spoken in: the saved Voice is marked H3-ready and attached to that Shot's voice refs so H3 recites with this exact accent instead of inventing its own voice. If that Shot already has an H3-ready voice the call is skipped (no duplicate take) unless you pass force=true on the user's explicit request; when a Shot has no voice or only a non-ready one, generate as the prompt requires
 12) overlay_poem_subtitles — burn an elegant title card and traditional vertical calligraphy poem columns onto an existing clip with ffmpeg (CPU only). Supply source_shot_id (newest succeeded H3 clip) and ordered lines with their start seconds taken from ASR word timestamps on the recitation audio; never guess timing
 
 Tools (name + args):
@@ -433,7 +433,7 @@ Tools (name + args):
 - accept_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"optional concise acceptance note"}
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - concatenate_shots  {"output_name":"optional stem","output_kind":"enhanced|raw","reencode":false}  // joins all finished Shot clips in order; report the absolute output path
-- generate_tts_audio  {"text":"...","name":"...","style":"longchang-girl|eric|custom","respell":"<retroflex=flat,...>","emotion":"...","lead_silence_s":1.0,"save_to_library":true}  // ComfyUI Qwen3-TTS; longchang-girl needs poem-specific respell pairs
+- generate_tts_audio  {"text":"...","name":"...","style":"longchang-girl|eric|custom","respell":"<retroflex=flat,...>","emotion":"...","lead_silence_s":1.0,"shot_id":"<shot this line is spoken in>","force":false,"save_to_library":true}  // ComfyUI Qwen3-TTS; longchang-girl needs poem-specific respell pairs; shot_id auto-marks H3-ready and binds the voice to that Shot; skipped if that Shot already has an H3-ready voice unless force=true
 - overlay_poem_subtitles  {"source_shot_id":"...","source_version":"latest|vN","title":"...","author":"...","dynasty":"<dynasty>","seal":"<char>","lines":[{"text":"<line>","start_s":1.06}]}
 - write_prompt / get_status
 

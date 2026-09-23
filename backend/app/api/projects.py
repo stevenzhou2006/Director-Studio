@@ -298,6 +298,12 @@ class ReplaceShotMaterialsBody(BaseModel):
     materials: list[ShotMaterialSelection] = Field(max_length=9)
 
 
+class AppendVoiceRefBody(BaseModel):
+    asset_id: str = Field(min_length=1)
+    file_key: str = "audio"
+    speaker: str = ""
+
+
 class ProjectDetailResponse(BaseModel):
     project: Project
     shots: list[Shot] = Field(default_factory=list)
@@ -1773,6 +1779,55 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
         shot = shot.model_copy(update={"meta": meta})
     save_shot(shot)
     return shot
+
+
+@router.post("/shots/{shot_id}/voice-refs", response_model=Shot)
+async def append_shot_voice_ref(shot_id: str, body: AppendVoiceRefBody) -> Shot:
+    """Attach one H3-ready Voice to a Shot without disturbing its other refs."""
+    shot = _find_shot(shot_id)
+    if any(ref.asset_id == body.asset_id for ref in shot.voice_refs):
+        return shot
+    used = {ref.audio_index for ref in shot.voice_refs}
+    audio_index = next((i for i in (1, 2, 3) if i not in used), None)
+    if audio_index is None:
+        raise HTTPException(400, f"{shot.id} already has 3 voice references")
+    ref = ShotVoiceRef(
+        asset_id=body.asset_id,
+        audio_index=audio_index,
+        file_key=body.file_key or "audio",
+        speaker=body.speaker,
+        notes="attached from Voice library",
+    )
+    updated = shot.model_copy(update={"voice_refs": [*shot.voice_refs, ref]})
+    try:
+        _validate_voice_refs(updated)
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    meta = dict(updated.meta or {})
+    meta["prompt_voice_signature"] = ""
+    updated = updated.model_copy(update={"meta": meta})
+    save_shot(updated)
+    return updated
+
+
+@router.delete("/shots/{shot_id}/voice-refs/{asset_id}", response_model=Shot)
+async def remove_shot_voice_ref(shot_id: str, asset_id: str) -> Shot:
+    """Detach one Voice from a Shot, renumbering the rest to stay contiguous."""
+    shot = _find_shot(shot_id)
+    remaining = [ref for ref in shot.voice_refs if ref.asset_id != asset_id]
+    if len(remaining) == len(shot.voice_refs):
+        return shot
+    ordered = sorted(remaining, key=lambda ref: ref.audio_index)
+    reindexed = [
+        ref.model_copy(update={"audio_index": position})
+        for position, ref in enumerate(ordered, start=1)
+    ]
+    updated = shot.model_copy(update={"voice_refs": reindexed})
+    meta = dict(updated.meta or {})
+    meta["prompt_voice_signature"] = ""
+    updated = updated.model_copy(update={"meta": meta})
+    save_shot(updated)
+    return updated
 
 
 @router.put("/shots/{shot_id}/materials", response_model=Shot)

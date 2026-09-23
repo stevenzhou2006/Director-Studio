@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.schemas import JobRecord, JobStatus
+from app.core.schemas import JobRecord, JobStatus, LibraryAsset, OutputSlot
 from app.pipelines.tts import workflow
 from app.pipelines.tts.pipeline import TtsPipeline
 
@@ -167,3 +167,72 @@ def test_postprocess_pads_lead_silence_for_h3(tmp_path: Path):
     padded = saved.get("audio_padded")
     assert padded is not None
     assert Path(padded).is_file()
+
+
+def _save_job(duration_s: float) -> JobRecord:
+    return JobRecord(
+        id="job_tts_save",
+        pipeline_id="tts",
+        asset_kind="voices",
+        status=JobStatus.succeeded,
+        name="recite",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        params={"style": "longchang-girl", "text": "红豆生南国"},
+        outputs={
+            "audio": OutputSlot(
+                key="audio", label="a", path="/tmp/audio.flac"
+            )
+        },
+    )
+
+
+def _stub_save(monkeypatch, duration_s: float) -> dict:
+    captured: dict = {}
+
+    def fake_save_asset_from_job(job, **kwargs):
+        captured.update(kwargs)
+        return LibraryAsset(
+            id="voi_x",
+            kind="voices",
+            name=kwargs.get("name") or "v",
+            pipeline_id="tts",
+            job_id=job.id,
+            created_at="2026-01-01T00:00:00+00:00",
+            files={"audio": "audio.flac"},
+            meta=kwargs.get("meta") or {},
+        )
+
+    class _Meta:
+        pass
+
+    meta = _Meta()
+    meta.duration_s = duration_s
+
+    monkeypatch.setattr(
+        "app.core.library.save_asset_from_job", fake_save_asset_from_job
+    )
+    monkeypatch.setattr(
+        "app.pipelines.tts.pipeline.probe_audio", lambda path: meta
+    )
+    return captured
+
+
+def test_save_to_library_marks_h3_ready_within_window(monkeypatch):
+    captured = _stub_save(monkeypatch, 3.5)
+    asset = TtsPipeline().save_to_library(
+        _save_job(3.5), name="Line 1", project_id="prj_1"
+    )
+    assert asset.meta["h3_ready"] is True
+    assert asset.meta["duration_s"] == 3.5
+    assert asset.meta["h3_file_key"] == "audio"
+    assert captured["meta"]["h3_ready"] is True
+
+
+def test_save_to_library_not_h3_ready_outside_window(monkeypatch):
+    _stub_save(monkeypatch, 20.0)
+    asset = TtsPipeline().save_to_library(
+        _save_job(20.0), name="Too long", project_id="prj_1"
+    )
+    assert asset.meta["h3_ready"] is False
+    assert asset.meta["duration_s"] == 20.0

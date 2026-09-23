@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from ....core.library.audio import probe_audio
+from ....core.library.store import load_asset
 from ....core.media.clip_generations import (
     ClipGenerationError,
     resolve_latest_succeeded_clip,
     resolve_source_clip,
 )
-from ....core.schemas import JobRecord, JobStatus
+from ....core.projects.models import Shot, ShotVoiceRef
+from ....core.projects.store import list_shots, save_shot
+from ....core.schemas import JobRecord, JobStatus, LibraryAsset
 from ....pipelines.tts import workflow as tts_workflow
+from ..intent import resolve_shot
 
 _TTS_TOOL_NAMES = frozenset({"generate_tts_audio", "generate_speech", "tts"})
 _OVERLAY_TOOL_NAMES = frozenset(
@@ -75,6 +79,32 @@ async def _handle_tts(
         )
     name_value = str(args.get("name") or "").strip() or f"Speech · {text[:16]}"
 
+    # Guard: never burn a throwaway take when the target Shot already carries an
+    # H3-ready voice. No Shot named, or only non-ready voices attached -> let the
+    # Director decide from the prompt and generate normally.
+    target_shot = _resolve_target_shot(args, project_id)
+    if target_shot is not None and not bool(args.get("force", False)):
+        ready = _h3_ready_voice_names(target_shot)
+        if ready:
+            actions.append(f"generate_tts_audio:skipped:{target_shot.id}")
+            if result_payloads is not None:
+                result_payloads.append(
+                    {
+                        "ok": True,
+                        "skipped": True,
+                        "shot_id": target_shot.id,
+                        "reason": "shot already has an H3-ready voice",
+                        "voices": ready,
+                    }
+                )
+            notes.append(
+                f"Skipped generate_tts_audio: Shot {target_shot.id} already has "
+                f"H3-ready voice(s): {', '.join(ready)}. Not generating a "
+                f"duplicate take. Pass force=true only if the user explicitly "
+                f"wants another."
+            )
+            return
+
     params: dict[str, Any] = {
         "text": text,
         "style": style,
@@ -136,6 +166,14 @@ async def _handle_tts(
             project_id=project_id,
         )
         asset_id = asset.id
+        bound = _bind_voice_to_shot(
+            asset=asset,
+            args=args,
+            project_id=project_id,
+            speaker=str(params.get("speaker") or "").strip(),
+        )
+        if bound is not None:
+            notes.append(bound)
 
     actions.append(f"generate_tts_audio:{asset_id or terminal.id}")
     warnings = list((terminal.params or {}).get("warnings") or [])
@@ -173,6 +211,85 @@ async def _handle_tts(
             else " · note: outside the 2–15s H3 voice-reference window."
         )
         + (f" Warnings: {'; '.join(warnings)}" if warnings else "")
+    )
+
+
+def _resolve_target_shot(args: dict[str, Any], project_id: str) -> Shot | None:
+    """Resolve the Shot the director named via shot_id/shot_index/title."""
+    shot_id = str(args.get("shot_id") or "").strip()
+    shot_index = args.get("shot_index") or args.get("index")
+    title = str(args.get("title") or "").strip()
+    if not (shot_id or shot_index or title):
+        return None
+    return resolve_shot(
+        list_shots(project_id),
+        shot_id=shot_id or None,
+        shot_index=shot_index,
+        title=title or None,
+    )
+
+
+def _h3_ready_voice_names(shot: Shot) -> list[str]:
+    """Names of voices already bound to this Shot that are H3-ready."""
+    names: list[str] = []
+    for ref in shot.voice_refs:
+        asset = load_asset("voices", ref.asset_id)
+        if asset is not None and bool((asset.meta or {}).get("h3_ready")):
+            names.append(asset.name or ref.asset_id)
+    return names
+
+
+def _bind_voice_to_shot(
+    *,
+    asset: LibraryAsset,
+    args: dict[str, Any],
+    project_id: str,
+    speaker: str,
+) -> str | None:
+    """Attach a freshly saved Voice to the Shot the director named, if any."""
+    shot = _resolve_target_shot(args, project_id)
+    if shot is None:
+        if not (
+            args.get("shot_id")
+            or args.get("shot_index")
+            or args.get("index")
+            or args.get("title")
+        ):
+            return None
+        return (
+            f"Voice {asset.id} saved but NOT bound: no Shot matched the given "
+            f"shot_id/index/title."
+        )
+    meta = asset.meta or {}
+    if not bool(meta.get("h3_ready")):
+        return (
+            f"Voice {asset.id} NOT bound to {shot.id}: outside the 2–15s H3 "
+            f"reference window (duration={meta.get('duration_s')})."
+        )
+    if any(ref.asset_id == asset.id for ref in shot.voice_refs):
+        return f"Voice {asset.id} already bound to {shot.id}."
+    used_indices = {ref.audio_index for ref in shot.voice_refs}
+    audio_index = next((i for i in (1, 2, 3) if i not in used_indices), None)
+    if audio_index is None:
+        return f"Voice {asset.id} NOT bound: {shot.id} already has 3 voice refs."
+    file_key = str(meta.get("h3_file_key") or "audio")
+    if not (asset.files or {}).get(file_key):
+        file_key = next(iter(asset.files or {}), "audio")
+    ref = ShotVoiceRef(
+        asset_id=asset.id,
+        audio_index=audio_index,
+        file_key=file_key,
+        speaker=speaker,
+        notes="director TTS auto-bind",
+    )
+    updated = shot.model_copy(update={"voice_refs": [*shot.voice_refs, ref]})
+    meta_out = dict(updated.meta or {})
+    meta_out["prompt_voice_signature"] = ""
+    updated = updated.model_copy(update={"meta": meta_out})
+    save_shot(updated)
+    return (
+        f"Bound Voice {asset.id} to {shot.id} as audio_{audio_index} "
+        f"(file_key={file_key}); H3 will recite with this accent."
     )
 
 

@@ -325,3 +325,116 @@ def test_submit_rejects_native_audio_instead_of_using_private_lock(
     assert "official H3" in response.text
     assert "locked source audio" in response.text
     assert started == []
+
+
+def test_append_voice_ref_attaches_and_marks_stale(client, voice_ref_env):
+    project = create_project("P", "Mia speaks")
+    _seed_voice(project.id, asset_id="voi_mia")
+    shot = _shot(project.id, shot_id="sht_append")
+    shot.meta = {"prompt_voice_signature": "old", "keep": "value"}
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.post(
+        f"/api/shots/{shot.id}/voice-refs",
+        json={"asset_id": "voi_mia", "file_key": "reference", "speaker": "Mia"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [ref["asset_id"] for ref in body["voice_refs"]] == ["voi_mia"]
+    assert body["voice_refs"][0]["audio_index"] == 1
+    assert body["meta"]["prompt_voice_signature"] == ""
+    assert body["meta"]["keep"] == "value"
+
+
+def test_append_voice_ref_rejects_not_ready(client, voice_ref_env):
+    project = create_project("P", "x")
+    _seed_voice(project.id, asset_id="voi_bad", ready=False)
+    shot = _shot(project.id, shot_id="sht_append_bad")
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.post(
+        f"/api/shots/{shot.id}/voice-refs",
+        json={"asset_id": "voi_bad", "file_key": "reference"},
+    )
+
+    assert response.status_code == 400
+    assert "h3-ready" in response.json()["detail"].lower()
+
+
+def test_append_voice_ref_rejects_when_full(client, voice_ref_env):
+    project = create_project("P", "x")
+    for index in (1, 2, 3):
+        _seed_voice(project.id, asset_id=f"voi_{index}")
+    shot = _shot(project.id, shot_id="sht_full").model_copy(
+        update={
+            "voice_refs": [
+                ShotVoiceRef(asset_id=f"voi_{index}", audio_index=index, file_key="reference")
+                for index in (1, 2, 3)
+            ]
+        }
+    )
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+    _seed_voice(project.id, asset_id="voi_4")
+
+    response = client.post(
+        f"/api/shots/{shot.id}/voice-refs",
+        json={"asset_id": "voi_4", "file_key": "reference"},
+    )
+
+    assert response.status_code == 400
+    assert "3 voice" in response.json()["detail"].lower()
+
+
+def test_append_voice_ref_is_idempotent(client, voice_ref_env):
+    project = create_project("P", "x")
+    _seed_voice(project.id, asset_id="voi_mia")
+    shot = _shot(project.id, shot_id="sht_idem").model_copy(
+        update={
+            "voice_refs": [
+                ShotVoiceRef(asset_id="voi_mia", audio_index=1, file_key="reference")
+            ]
+        }
+    )
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.post(
+        f"/api/shots/{shot.id}/voice-refs",
+        json={"asset_id": "voi_mia", "file_key": "reference"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["voice_refs"]) == 1
+
+
+def test_detach_voice_ref_removes_and_renumbers(client, voice_ref_env):
+    project = create_project("P", "x")
+    _seed_voice(project.id, asset_id="voi_a")
+    _seed_voice(project.id, asset_id="voi_b")
+    shot = _shot(project.id, shot_id="sht_detach").model_copy(
+        update={
+            "voice_refs": [
+                ShotVoiceRef(asset_id="voi_a", audio_index=1, file_key="reference"),
+                ShotVoiceRef(asset_id="voi_b", audio_index=2, file_key="reference"),
+            ]
+        }
+    )
+    save_shot(shot)
+    project.shot_ids = [shot.id]
+    save_project(project)
+
+    response = client.delete(f"/api/shots/{shot.id}/voice-refs/voi_a")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [ref["asset_id"] for ref in body["voice_refs"]] == ["voi_b"]
+    assert body["voice_refs"][0]["audio_index"] == 1
+    assert body["meta"]["prompt_voice_signature"] == ""

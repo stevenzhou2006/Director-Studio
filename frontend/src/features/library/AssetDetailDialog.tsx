@@ -1,7 +1,12 @@
-import { useMemo, useState } from "react";
-import type { OutputSlot } from "../../shared/api/types";
+import { useEffect, useMemo, useState } from "react";
+import type { OutputSlot, Shot } from "../../shared/api/types";
 import { Lightbox } from "../../shared/components/Lightbox";
-import type { LibraryAsset } from "./api";
+import {
+  attachVoiceToShot,
+  detachVoiceFromShot,
+  getProjectShots,
+  type LibraryAsset,
+} from "./api";
 
 const PREVIEW_KEYS = [
   "layout",
@@ -63,6 +68,130 @@ export function assetSlots(asset: LibraryAsset): OutputSlot[] {
       filename: files[key] || null,
       url: urls[key],
     }));
+}
+
+function voiceAttachFileKey(asset: LibraryAsset): string {
+  const metaKey = String(asset.meta?.h3_file_key || "");
+  if (metaKey && asset.files?.[metaKey]) return metaKey;
+  if (asset.files?.audio) return "audio";
+  return "reference";
+}
+
+function VoiceShotAttachPanel({ asset }: { asset: LibraryAsset }) {
+  const projectId = asset.project_id;
+  const [shots, setShots] = useState<Shot[] | null>(null);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const ready = Boolean(asset.meta?.h3_ready);
+  const fileKey = voiceAttachFileKey(asset);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let active = true;
+    getProjectShots(projectId)
+      .then((result) => {
+        if (active) setShots(result);
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId, asset.id]);
+
+  const apply = (updated: Shot) => {
+    setShots((current) =>
+      current ? current.map((shot) => (shot.id === updated.id ? updated : shot)) : current,
+    );
+  };
+
+  const attach = async (shotId: string) => {
+    setBusyId(shotId);
+    setError("");
+    try {
+      apply(await attachVoiceToShot(shotId, { asset_id: asset.id, file_key: fileKey }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const detach = async (shotId: string) => {
+    setBusyId(shotId);
+    setError("");
+    try {
+      apply(await detachVoiceFromShot(shotId, asset.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="voice-shot-attach">
+      <div className="voice-shot-attach-head">
+        <h3>Attach to Shots</h3>
+        {ready ? (
+          <small className="voice-shot-ready">H3-ready · attaches as a mouth-sync reference</small>
+        ) : (
+          <small className="voice-shot-warn">
+            Not H3-ready (outside the 2–15s window) — cannot attach
+          </small>
+        )}
+      </div>
+      {error ? <div className="banner error">{error}</div> : null}
+      {!projectId ? <p className="empty-copy">This voice is not owned by a project.</p> : null}
+      {projectId && shots == null ? <p className="empty-copy">Loading shots…</p> : null}
+      {projectId && shots != null && shots.length === 0 ? (
+        <p className="empty-copy">No shots in this project yet.</p>
+      ) : null}
+      {shots && shots.length > 0 ? (
+        <ul className="voice-shot-list">
+          {shots.map((shot, index) => {
+            const attached = shot.voice_refs.some((ref) => ref.asset_id === asset.id);
+            const full = shot.voice_refs.length >= 3;
+            const disabled = busyId === shot.id || (!attached && (!ready || full));
+            const reason = !ready
+              ? "Not H3-ready"
+              : full
+                ? "Shot already has 3 voices"
+                : "";
+            return (
+              <li className="voice-shot-row" key={shot.id}>
+                <span className="voice-shot-name">
+                  <strong>Shot {String(index + 1).padStart(2, "0")}</strong>
+                  <small>{shot.title}</small>
+                </span>
+                {attached ? (
+                  <button
+                    type="button"
+                    className="btn secondary sm"
+                    disabled={disabled}
+                    onClick={() => void detach(shot.id)}
+                  >
+                    {busyId === shot.id ? "…" : "Detach"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn primary sm"
+                    disabled={disabled}
+                    title={reason}
+                    onClick={() => void attach(shot.id)}
+                  >
+                    {busyId === shot.id ? "…" : "Attach"}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
 }
 
 export function AssetDetailDialog({
@@ -146,6 +275,8 @@ export function AssetDetailDialog({
               )}
             </div>
           )}
+
+          {asset.kind === "voices" ? <VoiceShotAttachPanel asset={asset} /> : null}
         </div>
       </div>
 

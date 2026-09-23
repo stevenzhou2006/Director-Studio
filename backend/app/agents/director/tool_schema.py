@@ -227,7 +227,12 @@ SPEECH_TOOL = function_tool(
         "poem's own characters (e.g. '长=藏,深=森,知=资'); style='eric' uses the "
         "native Sichuan CustomVoice speaker; style='custom' uses your own instruct. "
         "lead_silence_s prepends silence for an H3 mouth-sync reference. The audio "
-        "is saved as a Voice asset in this project's library."
+        "is saved as a Voice asset in this project's library. Always pass shot_id (or "
+        "shot_index/title) for the Shot this line is spoken in: the saved Voice is "
+        "then marked H3-ready and attached to that Shot so H3 recites with this exact "
+        "accent instead of inventing its own voice. If that Shot already has an "
+        "H3-ready voice, this call is skipped (no duplicate take) unless you pass "
+        "force=true on the user's explicit request."
     ),
     {
         "text": {
@@ -273,6 +278,25 @@ SPEECH_TOOL = function_tool(
             "default": "1.7B",
         },
         "save_to_library": {"type": "boolean", "default": True},
+        "shot_id": {
+            "type": "string",
+            "description": (
+                "Exact shot this recitation belongs to. When provided the saved "
+                "Voice is marked H3-ready and bound to that Shot's voice refs "
+                "so H3 mouth-syncs to it."
+            ),
+        },
+        "shot_index": {"type": "integer", "minimum": 1},
+        "title": {"type": "string", "description": "Shot title fallback."},
+        "force": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Generate anyway even if the target Shot already has an H3-ready "
+                "voice. Leave false so an existing good voice is never replaced by "
+                "a throwaway take; set true only on the user's explicit request."
+            ),
+        },
     },
     required=["text"],
 )
@@ -328,6 +352,47 @@ POEM_OVERLAY_TOOL = function_tool(
         "height": {"type": "integer"},
     },
     required=["title", "author", "lines"],
+)
+
+WEB_SEARCH_TOOL = function_tool(
+    "web_search",
+    (
+        "Search the public web for current, factual, or real-world information "
+        "the local model cannot reliably supply: historical facts, real people "
+        "and places, cultural or period accuracy, canonical poem text and "
+        "annotations, technical details, or anything after the model's training "
+        "cutoff. Use it to ground scripts, actor/scene/prop designs, and poem "
+        "overlays in verified sources, and cite the returned URLs. Do not use it "
+        "for pure creative fiction, mood, camera work, color, or pacing."
+    ),
+    {
+        "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "description": "What to look up on the web.",
+        },
+        "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+        },
+        "freshness": {
+            "type": "string",
+            "enum": ["pd", "pw", "pm", "py"],
+            "description": "Recency filter: past day, week, month, or year.",
+        },
+        "search_lang": {
+            "type": "string",
+            "description": "Result language code, e.g. 'en' or 'zh-hans'.",
+        },
+        "country": {
+            "type": "string",
+            "description": "Two-letter country code, e.g. 'us' or 'cn'.",
+        },
+    },
+    required=["query"],
 )
 
 
@@ -579,10 +644,11 @@ def director_tool_schemas(
     allow_save_storyboard: bool = True,
     include_chat_image_import: bool = False,
 ) -> list[dict[str, Any]]:
+    web_search_tools = [WEB_SEARCH_TOOL] if settings.web_search_configured else []
     if include_chat_image_import:
         return [CHAT_IMAGE_CLASSIFICATION_TOOL]
     if actor_design_intent(current_message):
-        return [ACTOR_DESIGN_TOOL]
+        return [ACTOR_DESIGN_TOOL, *web_search_tools]
     excluded = set()
     if project.script_locked:
         excluded.update(SCRIPT_TOOLS)
@@ -593,6 +659,7 @@ def director_tool_schemas(
         for tool in DIRECTOR_TOOL_SCHEMAS
         if tool["function"]["name"] not in excluded
     ]
+    tools = [*tools, *web_search_tools]
     normalized = current_message.lower()
     shot_layout_turn = bool(
         re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜)", normalized)
@@ -614,6 +681,7 @@ def director_tool_schemas(
             "revise_ref_frame",
             "write_prompt",
             "get_status",
+            "web_search",
         }
         tools = [
             tool

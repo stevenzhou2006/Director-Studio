@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import type { RefRole, Shot } from "../../shared/api/types";
+import type { RefRole, Shot, ShotVoiceRef } from "../../shared/api/types";
 import {
   listLibraryAssets,
   type LibraryAsset,
   type LibraryKind,
 } from "../library/api";
-import { replaceShotMaterials, type ShotMaterialSelection } from "./api";
+import {
+  replaceShotMaterials,
+  updateShotVoiceRefs,
+  type ShotMaterialSelection,
+} from "./api";
 
 type PictureKind = Exclude<LibraryKind, "voices">;
 
@@ -38,6 +42,22 @@ function preferredFileKey(asset: LibraryAsset): string | null {
 
 function materialKey(material: ShotMaterialSelection): string {
   return `${material.role}:${material.asset_id}:${material.file_key || ""}`;
+}
+
+function voiceFileKey(asset: LibraryAsset): string {
+  const metaKey = String(asset.meta?.h3_file_key || "");
+  if (metaKey && asset.files[metaKey]) return metaKey;
+  if (asset.files.audio) return "audio";
+  return Object.keys(asset.files).find((key) => asset.files[key]) || "audio";
+}
+
+function voiceH3Ready(asset: LibraryAsset): boolean {
+  return Boolean(asset.meta?.h3_ready);
+}
+
+function voiceDurationLabel(asset: LibraryAsset): string {
+  const dur = asset.meta?.duration_s;
+  return typeof dur === "number" ? ` · ${dur.toFixed(1)}s` : "";
 }
 
 function fileVariants(asset: LibraryAsset): { fileKey: string; preview: string }[] {
@@ -78,6 +98,7 @@ export function ShotMaterialEditor({
   onSaved?: (shot: Shot) => void;
 }) {
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
+  const [voiceAssets, setVoiceAssets] = useState<LibraryAsset[]>([]);
   const [materials, setMaterials] = useState<ShotMaterialSelection[]>(() =>
     normalizeMaterials(
       [...shot.refs]
@@ -85,17 +106,27 @@ export function ShotMaterialEditor({
         .map(({ role, asset_id, file_key }) => ({ role, asset_id, file_key })),
     ),
   );
+  const [voiceRefs, setVoiceRefs] = useState<ShotVoiceRef[]>(() =>
+    [...shot.voice_refs].sort((a, b) => a.audio_index - b.audio_index),
+  );
+  const initialVoiceSignature = JSON.stringify(
+    [...shot.voice_refs].sort((a, b) => a.audio_index - b.audio_index),
+  );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<LibraryKind | "all">("all");
 
   useEffect(() => {
     let active = true;
-    Promise.all(
-      PICTURE_KINDS.map((kind) => listLibraryAssets(kind, shot.project_id)),
-    )
-      .then((groups) => {
-        if (active) setAssets(groups.flat());
+    Promise.all([
+      Promise.all(PICTURE_KINDS.map((kind) => listLibraryAssets(kind, shot.project_id))),
+      listLibraryAssets("voices", shot.project_id),
+    ])
+      .then(([pictureGroups, voices]) => {
+        if (active) {
+          setAssets(pictureGroups.flat());
+          setVoiceAssets(voices);
+        }
       })
       .catch((cause) => {
         if (active) setError(cause instanceof Error ? cause.message : String(cause));
@@ -129,11 +160,34 @@ export function ShotMaterialEditor({
     if (selectedKeys.has(materialKey(next))) return;
     setMaterials((current) => normalizeMaterials([...current, next]));
   };
+  const addVoice = (asset: LibraryAsset) => {
+    if (voiceRefs.some((ref) => ref.asset_id === asset.id) || voiceRefs.length >= 3) {
+      return;
+    }
+    const used = new Set(voiceRefs.map((ref) => ref.audio_index));
+    const audioIndex = [1, 2, 3].find((index) => !used.has(index)) ?? voiceRefs.length + 1;
+    setVoiceRefs((current) => [
+      ...current,
+      {
+        asset_id: asset.id,
+        audio_index: audioIndex,
+        file_key: voiceFileKey(asset),
+        speaker: "",
+        notes: "human-selected in Shot materials",
+      },
+    ]);
+  };
+  const removeVoice = (assetId: string) => {
+    setVoiceRefs((current) => current.filter((ref) => ref.asset_id !== assetId));
+  };
   const save = async () => {
     setSaving(true);
     setError("");
     try {
-      const updated = await replaceShotMaterials(shot.id, normalizeMaterials(materials));
+      let updated = await replaceShotMaterials(shot.id, normalizeMaterials(materials));
+      if (JSON.stringify(voiceRefs) !== initialVoiceSignature) {
+        updated = await updateShotVoiceRefs(shot.id, voiceRefs);
+      }
       onSaved?.(updated);
       onClose();
     } catch (cause) {
@@ -200,6 +254,72 @@ export function ShotMaterialEditor({
             );
           })}
           {materials.length === 0 ? <p className="empty-copy">No Pictures selected for this Shot.</p> : null}
+        </div>
+        <div className="shot-material-voices" aria-label="Shot voice references">
+          <div className="shot-material-voices-heading">
+            <div><span>Audio</span><h3>Voices</h3></div>
+            <small>{voiceRefs.length} / 3 bound · H3 recites with these accents</small>
+          </div>
+          <div className="shot-material-voices-bound">
+            {voiceRefs.map((ref) => {
+              const asset = voiceAssets.find((candidate) => candidate.id === ref.asset_id);
+              const name = asset?.name || ref.asset_id;
+              return (
+                <div className="shot-material-voice-chip" key={ref.asset_id}>
+                  <span className="shot-material-voice-index">A{ref.audio_index}</span>
+                  <span>
+                    <strong>{name}</strong>
+                    <small>{ref.file_key}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className="shot-material-remove"
+                    aria-label={`Remove voice ${name}`}
+                    onClick={() => removeVoice(ref.asset_id)}
+                    disabled={saving}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              );
+            })}
+            {voiceRefs.length === 0 ? (
+              <p className="empty-copy">No voice bound. H3 will invent its own audio for this Shot.</p>
+            ) : null}
+          </div>
+          <div className="shot-material-voices-library">
+            {voiceAssets.map((asset) => {
+              const bound = voiceRefs.some((ref) => ref.asset_id === asset.id);
+              const ready = voiceH3Ready(asset);
+              return (
+                <article
+                  className={bound ? "shot-material-voice selected" : "shot-material-voice"}
+                  key={asset.id}
+                >
+                  <div>
+                    <strong>{asset.name}</strong>
+                    <small>
+                      {ready
+                        ? `H3-ready${voiceDurationLabel(asset)}`
+                        : "Not H3-ready (outside 2–15s)"}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    className="shot-material-add"
+                    aria-label={bound ? `${asset.name} bound` : `Add ${asset.name}`}
+                    disabled={bound || !ready || voiceRefs.length >= 3 || saving}
+                    onClick={() => addVoice(asset)}
+                  >
+                    {bound ? "Bound" : "Add"}
+                  </button>
+                </article>
+              );
+            })}
+            {voiceAssets.length === 0 ? (
+              <p className="empty-copy">No Voice assets in this project yet.</p>
+            ) : null}
+          </div>
         </div>
         <div className="shot-material-editor-library" aria-label="Project Library materials">
           <div className="shot-material-library-heading">

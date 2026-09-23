@@ -90,6 +90,7 @@ from .casting_service import (
     recast_shot_assets as _recast_shot_assets,
 )
 from .reference_service import (
+    _SHEET_FILE_KEYS,
     _actor_image_for_ref_frame,
     _crop_sheet_front_panel,
     _match_library_actor,
@@ -1744,8 +1745,18 @@ class DirectorService:
                 f"Layout source asset {asset.id} has no readable file for {key_label}"
             )
         filename, data, used_key = packed
-        if requested_key and used_key != requested_key and not used_key.startswith(
-            f"{requested_key}->"
+        # Actor resolution intentionally substitutes the best declared view
+        # (e.g. a quadruped's full-body sheet over an anthropomorphic bust), so a
+        # recognized turnaround sheet is accepted even when it differs from the
+        # requested key; the file is on disk and would otherwise be misreported.
+        substituted_actor_sheet = source.role == RefRole.actor and (
+            used_key.split("->", 1)[0] in _SHEET_FILE_KEYS
+        )
+        if (
+            requested_key
+            and used_key != requested_key
+            and not used_key.startswith(f"{requested_key}->")
+            and not substituted_actor_sheet
         ):
             raise ValueError(
                 f"Layout source asset {asset.id} has no readable file for key "

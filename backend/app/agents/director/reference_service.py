@@ -18,6 +18,10 @@ _TAIL_FRAME_IMAGE1_NOTES = (
     "or keep motion blur and compression artifacts as identity features."
 )
 
+# Multi-panel actor turnaround sheets. Always reduced to their front panel before
+# being fed to Qwen Edit, which otherwise copies the panel structure.
+_SHEET_FILE_KEYS = ("fullbody_threeview", "bust_threeview", "asset_sheet")
+
 
 def build_tail_frame_revision_brief(
     layout: LayoutReference,
@@ -344,11 +348,11 @@ def _actor_image_for_ref_frame(
     Identity still for layout reference-frame.
 
     Priority:
-    1) ``bust_threeview`` front panel — the chest-up view keeps hats, headwear,
+    1) Quadrupeds: the full-body sheet front panel, because a quadruped's single
+       ``master``/``bust_threeview`` can be an anthropomorphic upright render while
+       the sheet carries the true on-all-fours anatomy.
+    2) ``bust_threeview`` front panel — the chest-up view keeps hats, headwear,
        and facial identity that a small full-body panel loses.
-    2) Quadrupeds: the full-body sheet front panel, because a quadruped's single
-       ``master`` can be an anthropomorphic upright render while the sheet carries
-       the true on-all-fours anatomy.
     3) An explicit non-sheet key, then ``master``/portrait.
     4) Remaining three-view sheets, front-panel cropped.
 
@@ -375,22 +379,25 @@ def _actor_image_for_ref_frame(
     def _declared(key: str) -> bool:
         return bool(files.get(key))
 
-    # 1) Face / headwear view: keep hats and facial identity for the Layout.
-    if _declared("bust_threeview"):
-        hit = resolve_asset_image(asset, role="actor", file_key="bust_threeview")
-        if hit:
-            name, data, used = hit
-            return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
-
+    # 1) Quadrupeds: a master/bust can be an anthropomorphic upright render, so
+    # the turnaround sheet's front panel wins first and Layouts use the real
+    # on-all-fours animal. This must precede the bust branch below, otherwise a
+    # cat that also has a ``bust_threeview`` would resolve to the bust panel and
+    # a requested ``fullbody_threeview`` would be reported as unreadable.
     if species == SPECIES_QUADRUPED and preferred_key != "input_actor":
-        # 2) A quadruped's master can be an anthropomorphic upright render; prefer
-        # the turnaround sheet's front panel so Layouts use the real animal.
         for key in ("fullbody_threeview", "asset_sheet"):
             if not _declared(key):
                 continue
             hit = resolve_asset_image(asset, role="actor", file_key=key)
             if not hit:
                 continue
+            name, data, used = hit
+            return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
+
+    # 2) Face / headwear view: keep hats and facial identity for the Layout.
+    if _declared("bust_threeview"):
+        hit = resolve_asset_image(asset, role="actor", file_key="bust_threeview")
+        if hit:
             name, data, used = hit
             return _sheet_front_crop(name, data, used, force=True) or (name, data, used)
 

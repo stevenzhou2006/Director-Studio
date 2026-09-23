@@ -513,3 +513,52 @@ def test_actor_ref_frame_honors_selected_threeview_as_single_front_crop(tmp_path
     )
     assert used == "fullbody_threeview->front_crop"
     assert name == "actor_front_panel.png"
+
+
+def test_quadruped_actor_with_bust_still_resolves_fullbody_for_layout(tmp_path, monkeypatch):
+    """A cat that also has a bust sheet must not report fullbody as unreadable.
+
+    Regression: the bust branch preempted the quadruped full-body branch, so a
+    requested ``fullbody_threeview`` resolved to ``bust_threeview->front_crop``
+    and ``_read_layout_source`` rejected it as "no readable file".
+    """
+    from app.config import settings
+    from app.agents.director.service import DirectorService, _actor_image_for_ref_frame
+    from app.core.projects.layouts import LayoutSourceRef
+    from app.core.projects.models import RefRole
+    from app.core.schemas import LibraryAsset
+    from PIL import Image
+
+    lib = tmp_path / "library"
+    monkeypatch.setattr(settings, "library_root", lib)
+    adir = lib / "actors" / "act_cat"
+    adir.mkdir(parents=True)
+    Image.new("RGB", (1536, 768), (60, 40, 30)).save(adir / "fullbody_threeview.png")
+    Image.new("RGB", (1536, 768), (90, 60, 40)).save(adir / "bust_threeview.png")
+    asset = LibraryAsset(
+        id="act_cat",
+        kind="actors",
+        name="xiaobai",
+        notes="",
+        pipeline_id="actor",
+        job_id="j",
+        created_at="t",
+        files={
+            "fullbody_threeview": "fullbody_threeview.png",
+            "bust_threeview": "bust_threeview.png",
+        },
+        meta={"species": "quadruped", "description": ""},
+    )
+    (adir / "asset.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
+
+    _name, _data, used = _actor_image_for_ref_frame(
+        asset, preferred_key="fullbody_threeview"
+    )
+    assert used == "fullbody_threeview->front_crop"
+
+    svc = DirectorService(plan_provider=object(), orchestrator=object())
+    source = LayoutSourceRef(
+        role=RefRole.actor, asset_id="act_cat", file_key="fullbody_threeview"
+    )
+    _filename, _data, resolved_key = svc._read_layout_source(asset, source)
+    assert resolved_key == "fullbody_threeview->front_crop"

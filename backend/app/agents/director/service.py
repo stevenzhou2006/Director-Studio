@@ -1176,6 +1176,7 @@ class DirectorService:
                 prompt_text.GLOBAL_DIRECTION_SYSTEM,
                 user,
                 guides=("global-direction",),
+                response_format=None,
             )
         cleaned = _clean_direction_text(raw)
         if not cleaned:

@@ -26,6 +26,7 @@ class PlanProvider(Protocol):
         user: str,
         *,
         guides: Iterable[str] = (),
+        response_format: dict[str, Any] | str | None = "json",
     ) -> str: ...
 
     async def complete_with_images(

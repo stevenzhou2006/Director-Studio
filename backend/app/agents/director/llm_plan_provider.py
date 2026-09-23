@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable
 
 from ...core.llm import LLMProvider, get_llm_provider
 from .skill_loader import with_director_skill
@@ -30,12 +30,13 @@ class DirectorLLMPlanProvider:
         user: str,
         *,
         guides: Iterable[str] = (),
+        response_format: dict[str, Any] | str | None = "json",
     ) -> str:
         prompt = with_director_skill(f"{system}\n\n{user}", guides=guides)
         result = await self.client.chat_response(
             self.model,
             messages=[{"role": "user", "content": prompt}],
-            format="json",
+            format=response_format,
             options={"enable_thinking": False},
         )
         return str(result.get("content") or "")

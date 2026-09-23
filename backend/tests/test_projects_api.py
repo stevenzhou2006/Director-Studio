@@ -254,9 +254,10 @@ def _install_fake_complete(client, response_text: str):
     provider = client.app.state.plan_provider
     seen: dict = {}
 
-    async def fake_complete(system, user, *, guides=()):
+    async def fake_complete(system, user, *, guides=(), response_format="json"):
         seen["guides"] = tuple(guides)
         seen["user"] = user
+        seen["response_format"] = response_format
         return response_text
 
     provider.complete = fake_complete  # type: ignore[assignment]
@@ -276,6 +277,7 @@ def test_expand_global_direction_uses_director_llm(client):
     assert response.json()["detail"] == "Detailed direction text."
     assert seen["guides"] == ("global-direction",)
     assert "一个简单的场景想法" in seen["user"]
+    assert seen["response_format"] is None
 
 
 def test_app_global_direction_round_trips(client):
@@ -357,6 +359,7 @@ def test_expand_app_global_direction_uses_director_llm(client):
     assert response.status_code == 200, response.text
     assert response.json()["detail"] == "Expanded app-wide direction."
     assert "General production" in seen["user"]
+    assert seen["response_format"] is None
 
 
 def test_expand_global_direction_rejects_blank_description(client):

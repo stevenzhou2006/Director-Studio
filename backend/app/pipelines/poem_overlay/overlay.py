@@ -306,6 +306,75 @@ def _build_seal(
     return path
 
 
+def render_poem_title_still(
+    *,
+    input_path: Path,
+    output_path: Path,
+    title: str,
+    author: str,
+    dynasty: str = "唐",
+    seal_text: str = "狸",
+    calligraphy_font: str | None = None,
+    serif_font: str | None = None,
+    work_dir: Path | None = None,
+    margin_x: int | None = None,
+    margin_y: int | None = None,
+) -> dict[str, int]:
+    """Composite the title card onto a still frame (PIL only, no ffmpeg).
+
+    Places ``《title》`` + ``dynasty · author`` + rule + red seal in the upper-left
+    of ``input_path`` and writes ``output_path``. Used to give the layout reference
+    frame a deterministic, font-correct attribution while the model-rendered plate
+    stays text-free.
+    """
+    clean_title = str(title or "").strip()
+    clean_author = str(author or "").strip()
+    if not clean_title or not clean_author:
+        raise PoemOverlayError("title and author are required")
+
+    input_path = Path(input_path)
+    if not input_path.is_file():
+        raise PoemOverlayError(f"input image not found: {input_path}")
+
+    calligraphy, serif = resolve_fonts(
+        calligraphy_font=calligraphy_font,
+        serif_font=serif_font,
+    )
+
+    import tempfile
+
+    temp_root = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="poem-still-"))
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        base = Image.open(input_path).convert("RGBA")
+        width, height = base.size
+        if width <= 0 or height <= 0:
+            raise PoemOverlayError("image dimensions must be positive")
+        scale = height / _REF_HEIGHT
+        title_png = _build_title_card(
+            title=clean_title,
+            author=clean_author,
+            dynasty=str(dynasty or "唐"),
+            seal_text=seal_text or "狸",
+            calligraphy=calligraphy,
+            serif=serif,
+            scale=scale,
+            work_dir=temp_root,
+        )
+        card = Image.open(title_png).convert("RGBA")
+        pos_x = int(margin_x) if margin_x is not None else round(36 * scale)
+        pos_y = int(margin_y) if margin_y is not None else round(84 * scale)
+        base.alpha_composite(card, (pos_x, pos_y))
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        base.save(output_path)
+    finally:
+        if work_dir is None:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+    return {"width": width, "height": height}
+
+
 def render_poem_overlay(
     *,
     input_path: Path,

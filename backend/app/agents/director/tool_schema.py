@@ -308,9 +308,11 @@ POEM_OVERLAY_TOOL = function_tool(
         "columns onto an existing video with ffmpeg (CPU only, no GPU). Each column "
         "fades in exactly when its line starts. Provide source_shot_id (resolves the "
         "newest succeeded H3 clip) or source_job_id, plus title, author, and the "
-        "ordered lines with their start seconds. Get start_s from ASR word "
-        "timestamps on the recitation audio; never guess them. Returns the rendered "
-        "video URL and host path."
+        "ordered lines. title/author/dynasty/seal fall back to the shot's stored "
+        "poem metadata, and a line's start_s is auto-derived from ASR word "
+        "timestamps on the shot's bound recitation audio when omitted — never "
+        "guess timings. The resolved poem is saved back to the shot. Returns the "
+        "rendered video URL and host path."
     ),
     {
         "source_shot_id": {"type": "string", "description": "Shot whose clip is overlaid."},
@@ -340,10 +342,14 @@ POEM_OVERLAY_TOOL = function_tool(
                     "start_s": {
                         "type": "number",
                         "minimum": 0,
-                        "description": "Seconds when this line starts.",
+                        "description": (
+                            "Seconds when this line starts. Omit to auto-derive "
+                            "from ASR word timestamps on the shot's bound "
+                            "recitation audio."
+                        ),
                     },
                 },
-                "required": ["text", "start_s"],
+                "required": ["text"],
                 "additionalProperties": False,
             },
         },

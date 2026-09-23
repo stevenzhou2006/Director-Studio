@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     poem_calligraphy_font: str = ""
     poem_serif_font: str = ""
 
+    # Poem line-timing ASR (faster-whisper). The backend venv does not ship
+    # faster-whisper, so timing runs in a subprocess using a Python that has it
+    # installed (system python3 with user site-packages). Models are read from the
+    # shared faster-whisper cache so nothing is re-downloaded.
+    poem_asr_python: str = "/usr/bin/python3"
+    poem_asr_model: str = "medium"
+    poem_asr_language: str = "zh"
+    poem_asr_cache_dir: str = str(Path.home() / ".cache" / "faster_whisper")
+    poem_asr_timeout_sec: float = 300.0
+
     # App-wide global direction appended to every generation prompt (H3 video,
     # Layout/reference frames, and asset pipelines). A project's own
     # ``global_prompt`` overrides this default. Empty means no injection.

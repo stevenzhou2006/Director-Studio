@@ -26,11 +26,15 @@ Pillow), so it never waits for the GPU.
 
 ## Timing (critical)
 
-Get every `start_s` from ASR word timestamps on the padded recitation audio
-(for example faster-whisper `word_timestamps=True`), picking the first word of
-each line as the start. **Never guess or evenly distribute the starts.** ASR
-garbles dialect characters differently per render, so locate each line as the
-first word after a long pause instead of matching a guessed character.
+Omit `start_s` and the tool auto-derives every line start from ASR word
+timestamps on the shot's bound recitation audio (faster-whisper, segment/pause
+aligned — never character-matched, since the accent garbles glyphs). You only need
+to supply the ordered line texts. **Never guess or evenly distribute the starts by
+hand.** If you do pass explicit `start_s`, those win.
+
+The resolved poem (title/author/dynasty/seal/lines) is saved back to
+`shot.meta.poem`, so a later `queue_ref_frame` for the same shot reuses it and
+produces the font-composited `layout_titled` preview automatically.
 
 ## QC before delivery
 

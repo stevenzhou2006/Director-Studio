@@ -302,27 +302,83 @@ async def _handle_overlay(
     notes: list[str],
     result_payloads: list[dict[str, Any]] | None,
 ) -> None:
-    title = str(args.get("title") or "").strip()
-    author = str(args.get("author") or "").strip()
+    from ..poem_meta import get_poem, set_poem
+
+    source_shot = _resolve_overlay_shot(args=args, project_id=project_id)
+    poem = get_poem(source_shot) if source_shot is not None else {}
+
+    title = str(args.get("title") or poem.get("title") or "").strip()
+    author = str(args.get("author") or poem.get("author") or "").strip()
     if not title or not author:
-        raise ValueError("overlay_poem_subtitles requires title and author")
+        raise ValueError(
+            "overlay_poem_subtitles requires title and author (or a shot with "
+            "poem metadata)"
+        )
+    dynasty = str(args.get("dynasty") or poem.get("dynasty") or "唐").strip() or "唐"
+    seal = str(args.get("seal") or poem.get("seal") or "狸").strip() or "狸"
+
     raw_lines = args.get("lines")
     if not isinstance(raw_lines, list) or not raw_lines:
+        raw_lines = poem.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
         raise ValueError(
-            "overlay_poem_subtitles requires ordered lines of {text, start_s}"
+            "overlay_poem_subtitles requires ordered lines of {text[, start_s]}"
         )
     lines: list[dict[str, Any]] = []
+    needs_timing = False
     for item in raw_lines:
-        if not isinstance(item, dict):
-            raise TypeError("each poem line must be an object with text and start_s")
-        line_text = str(item.get("text") or "").strip()
+        if isinstance(item, dict):
+            line_text = str(item.get("text") or "").strip()
+            start_raw = item.get("start_s")
+        elif isinstance(item, str):
+            line_text = item.strip()
+            start_raw = None
+        else:
+            raise TypeError("each poem line must be a string or {text, start_s}")
         if not line_text:
             raise ValueError("each poem line requires non-empty text")
-        lines.append(
-            {
-                "text": line_text,
-                "start_s": _optional_float(item.get("start_s"), default=0.0),
-            }
+        if start_raw is None:
+            needs_timing = True
+            lines.append({"text": line_text, "start_s": None})
+        else:
+            lines.append(
+                {"text": line_text, "start_s": _optional_float(start_raw, default=0.0)}
+            )
+
+    if needs_timing:
+        if source_shot is None:
+            raise ValueError(
+                "auto line timing requires source_shot_id with bound recitation audio"
+            )
+        from ....pipelines.poem_overlay.timing import (
+            PoemTimingError,
+            derive_line_starts,
+        )
+
+        try:
+            starts = derive_line_starts([e["text"] for e in lines], shot=source_shot)
+        except PoemTimingError as exc:
+            raise ValueError(f"could not auto-time poem lines: {exc}") from exc
+        for entry, start in zip(lines, starts):
+            if entry.get("start_s") is None:
+                entry["start_s"] = start
+    for entry in lines:
+        entry["start_s"] = float(entry.get("start_s") or 0.0)
+
+    # Persist the resolved poem so the layout-frame titled preview and later
+    # overlays reuse the same title/attribution without re-supplying it.
+    if source_shot is not None:
+        save_shot(
+            set_poem(
+                source_shot,
+                {
+                    "title": title,
+                    "author": author,
+                    "dynasty": dynasty,
+                    "seal": seal,
+                    "lines": lines,
+                },
+            )
         )
 
     source_path, source_label = _resolve_overlay_source(
@@ -341,8 +397,8 @@ async def _handle_overlay(
     params: dict[str, Any] = {
         "title": title,
         "author": author,
-        "dynasty": str(args.get("dynasty") or "唐").strip() or "唐",
-        "seal": str(args.get("seal") or "狸").strip() or "狸",
+        "dynasty": dynasty,
+        "seal": seal,
         "lines": lines,
         "output_name": output_name,
         "project_id": project_id,
@@ -394,6 +450,16 @@ async def _handle_overlay(
         f"Rendered vertical poem subtitles for 《{title}》 onto {source_label} "
         f"({len(lines)} lines) → {video_slot.url}"
     )
+
+
+def _resolve_overlay_shot(
+    *, args: dict[str, Any], project_id: str
+) -> Shot | None:
+    """Best-effort resolve the shot the overlay targets (for poem defaults/timing)."""
+    source_shot_id = str(args.get("source_shot_id") or "").strip()
+    if not source_shot_id:
+        return None
+    return resolve_shot(list_shots(project_id), shot_id=source_shot_id)
 
 
 def _resolve_overlay_source(

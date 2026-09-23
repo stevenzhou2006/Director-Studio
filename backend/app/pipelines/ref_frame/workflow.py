@@ -74,6 +74,7 @@ LIGHTNING_LORA_NAME = (
 
 OUTPUT_LABELS = {
     "layout": "01 · Layout Reference Frame",
+    "layout_titled": "02 · Titled Preview (font-composited)",
 }
 
 

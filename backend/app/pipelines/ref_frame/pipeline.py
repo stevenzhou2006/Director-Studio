@@ -62,6 +62,10 @@ class RefFramePipeline(Pipeline):
                 ],
                 "output_slots": [
                     {"key": "layout", "label": workflow.OUTPUT_LABELS["layout"]},
+                    {
+                        "key": "layout_titled",
+                        "label": workflow.OUTPUT_LABELS["layout_titled"],
+                    },
                 ],
                 "node_ids": {
                     "description": workflow.NODE_DESCRIPTION,
@@ -83,6 +87,19 @@ class RefFramePipeline(Pipeline):
         description = (p.get("description") or "").strip()
         if not description:
             raise ValueError("description is required")
+        # When the shot carries a poem, the title/attribution are composited in
+        # post with real fonts. The model must NOT render any CJK text or seals
+        # (it garbles them), so reserve the margin as clean blank rice paper.
+        poem = p.get("poem")
+        if isinstance(poem, dict) and str(poem.get("title") or "").strip():
+            description = (
+                description
+                + "\n\nTITLE/ATTRIBUTION HANDLING: Do NOT render any Chinese "
+                "characters, poem title, author/dynasty attribution, seal, or any "
+                "on-screen text anywhere in the frame. Leave the right vertical "
+                "margin as clean, empty rice-paper negative space reserved for a "
+                "post-composited title card. The frame itself must contain no text."
+            )
         description = append_global_prompt(
             description, effective_global_prompt(job.project_id)
         )
@@ -136,6 +153,48 @@ class RefFramePipeline(Pipeline):
     ) -> dict[str, ComfyImageRef]:
         return workflow.map_history_outputs(history)
 
+    def postprocess_job_outputs(
+        self, job: JobRecord, saved: dict[str, Any]
+    ) -> None:
+        """Composite a font-correct titled preview when the shot carries a poem.
+
+        The model-rendered ``layout`` stays text-free (it is the H3 reference);
+        ``layout_titled`` is a separate preview with the title card burned in by
+        real fonts, so the attribution is always correct.
+        """
+        params = job.params or {}
+        poem = params.get("poem")
+        if not isinstance(poem, dict):
+            return
+        title = str(poem.get("title") or "").strip()
+        author = str(poem.get("author") or "").strip()
+        if not title or not author:
+            return
+        source = saved.get("layout")
+        if not source:
+            return
+        from pathlib import Path
+
+        from ..poem_overlay.overlay import PoemOverlayError, render_poem_title_still
+
+        source_path = Path(source)
+        titled_path = source_path.with_name("layout_titled.png")
+        try:
+            render_poem_title_still(
+                input_path=source_path,
+                output_path=titled_path,
+                title=title,
+                author=author,
+                dynasty=str(poem.get("dynasty") or "唐"),
+                seal_text=str(poem.get("seal") or "狸"),
+            )
+        except (PoemOverlayError, OSError) as exc:
+            params["warnings"] = list(params.get("warnings") or []) + [
+                f"titled preview skipped: {exc}"
+            ]
+            return
+        saved["layout_titled"] = titled_path
+
     def library_input_keys(self) -> list[str]:
         return []
 
@@ -156,11 +215,14 @@ class RefFramePipeline(Pipeline):
         # Prefer explicit, then job, then params.project_id (shot pipeline)
         resolved = project_id or job.project_id or p.get("project_id")
 
+        # Only the text-free ``layout`` is persisted to the library: it is the
+        # H3 reference. The font-composited ``layout_titled`` preview stays a
+        # job output and must never condition H3 (which would morph the text).
         return save_asset_from_job(
             job,
             name=name,
             notes=notes,
-            file_keys=list(self.output_labels.keys()) or None,
+            file_keys=["layout"],
             input_keys=self.library_input_keys(),
             meta={
                 "review_status": "pending_review",

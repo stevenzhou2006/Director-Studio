@@ -40,7 +40,8 @@ def test_speech_and_overlay_tools_are_exposed_with_expected_contracts():
 
     overlay = _tool("overlay_poem_subtitles")["function"]["parameters"]
     assert overlay["required"] == ["title", "author", "lines"]
-    assert overlay["properties"]["lines"]["items"]["required"] == ["text", "start_s"]
+    # start_s is optional: it is auto-derived from ASR on the bound recitation.
+    assert overlay["properties"]["lines"]["items"]["required"] == ["text"]
     assert SPEECH_TOOL["function"]["name"] == "generate_tts_audio"
     assert POEM_OVERLAY_TOOL["function"]["name"] == "overlay_poem_subtitles"
 

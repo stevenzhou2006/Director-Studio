@@ -1440,6 +1440,11 @@ class DirectorService:
                 "output_prefix": (
                     f"director-studio/{project.id}/{shot.id}/ref_frame/{layout_ref_id}"
                 ),
+                **(
+                    {"poem": shot.meta["poem"]}
+                    if isinstance(shot.meta.get("poem"), dict)
+                    else {}
+                ),
             },
             project_id=project.id,
         )

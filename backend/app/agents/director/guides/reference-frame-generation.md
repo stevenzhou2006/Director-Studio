@@ -22,6 +22,18 @@ Create one final cinematic frame in 16:9. Image1 controls the archive corridor g
 
 Explain each source's identity, design, and spatial contribution in the Qwen prompt. Preserve source order, use exact inventory and file keys, and describe the desired composition as a visual target rather than a guaranteed video endpoint.
 
+## Poem title / attribution frames
+
+Never ask the image model to render Chinese characters, a poem title, an
+author/dynasty line, or a seal — Qwen and H3 garble small CJK glyphs and hallucinate
+extra characters. When a shot carries a poem, the title card (`《title》` in Ma Shan
+Zheng + `dynasty · author` in Noto Serif + rule + red seal) is composited in post
+with real fonts. In the Layout prompt, leave the right vertical margin as clean,
+empty rice-paper negative space and request no on-screen text. The pipeline adds
+this guard automatically when `shot.meta.poem` is set, and emits a separate
+`layout_titled` preview; the text-free `layout` stays the H3 reference so H3 never
+morphs the attribution.
+
 ## Repair discipline
 
 Rejected Layouts are diagnostic-only: never reuse one as a Qwen or GPT input or an H3 `<Picture N>` reference. Use it only to diagnose the failure, then generate from approved sources and the concrete repair goal.

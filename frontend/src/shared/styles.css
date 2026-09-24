@@ -3676,6 +3676,12 @@ select {
   letter-spacing: 0.08em;
 }
 
+.mobile-library-preview-more .mobile-library-preview.empty {
+  border-style: dashed;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
 .mobile-asset-category-page {
   display: grid;
   gap: 0.75rem;

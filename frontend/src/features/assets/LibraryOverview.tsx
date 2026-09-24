@@ -12,6 +12,8 @@ import { AssetMetadataDialog } from "../library/AssetMetadataDialog";
 
 type VisibleLibraryKind = Exclude<LibraryKind, "layouts" | "costumes">;
 
+const PREVIEW_LIMIT = 8;
+
 const GROUPS: { id: VisibleLibraryKind; label: string; empty: string }[] = [
   { id: "actors", label: "Actors", empty: "No cast prepared" },
   { id: "scenes", label: "Scenes", empty: "No locations prepared" },
@@ -97,6 +99,8 @@ export function LibraryOverview({ onSelectKind }: {
       <div className="mobile-library-groups">
         {GROUPS.map((group) => {
           const assets = groups[group.id] || [];
+          const visibleAssets = assets.slice(0, PREVIEW_LIMIT);
+          const extraCount = assets.length - visibleAssets.length;
           return (
             <section key={group.id} className="mobile-library-group">
               <header className="mobile-library-group-heading">
@@ -117,7 +121,7 @@ export function LibraryOverview({ onSelectKind }: {
               </header>
               {assets.length ? (
                 <div className="mobile-library-preview-strip">
-                  {assets.slice(0, 6).map((asset) => {
+                  {visibleAssets.map((asset) => {
                     const preview = assetPreviewUrl(asset);
                     return (
                       <button
@@ -134,6 +138,19 @@ export function LibraryOverview({ onSelectKind }: {
                       </button>
                     );
                   })}
+                  {extraCount > 0 ? (
+                    <button
+                      type="button"
+                      className="mobile-library-preview-card mobile-library-preview-more"
+                      aria-label={`View all ${assets.length} ${group.label}`}
+                      onClick={() => onSelectKind(group.id)}
+                    >
+                      <div className="mobile-library-preview empty">
+                        <span>+{extraCount}</span>
+                      </div>
+                      <strong>View all</strong>
+                    </button>
+                  ) : null}
                 </div>
               ) : <p>{group.empty}</p>}
             </section>

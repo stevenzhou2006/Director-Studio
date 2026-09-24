@@ -15,8 +15,11 @@ from ...core.projects.layouts import LayoutBrief, RefRole
 from ...core.projects.models import Shot
 from ...core.prompting import (
     append_global_prompt,
+    append_style_lock,
     effective_global_prompt,
+    effective_style_lock,
     global_prompt_block,
+    style_lock_block,
 )
 from .skill_loader import with_director_skill
 
@@ -215,6 +218,7 @@ def _analysis_prompt(
     review_image_used: bool = False,
     feedback: str = "",
     global_prompt: str = "",
+    style_lock: str = "",
 ) -> str:
     def _character_count(caption: str) -> int:
         match = re.match(
@@ -276,8 +280,21 @@ def _analysis_prompt(
             "attachment shows the previous state, and do not name an ImageN as the "
             "authority for a detail the global direction changes.\n\n"
         )
+    style_block = ""
+    if (style_lock or "").strip():
+        style_block = (
+            f"{style_lock_block(style_lock)}\n"
+            "Every shot of this project must be rendered in exactly this art style so "
+            "the frames read as one film. Carry the style into scene_lock and write it "
+            "into generation_prompt as a positive instruction. Do not substitute a "
+            "photoreal, anime, or any other style for the locked one, even if a "
+            "reference attachment (for example a photographic scene plate) is in a "
+            "different medium: the reference controls content, the style lock controls "
+            "the rendering medium.\n\n"
+        )
     return (
         f"{global_block}"
+        f"{style_block}"
         "You are the visual director for one image-generation shot. Inspect every attached "
         "image before answering. Image captions are ordered exactly like the attachments.\n\n"
         f"SHOT TITLE: {shot.title}\n"
@@ -383,6 +400,7 @@ async def analyze_ref_frame(
     if review_image is not None:
         ollama_images.append(_vision_jpeg(review_image[1]))
     global_prompt = effective_global_prompt(shot.project_id)
+    style_lock = effective_style_lock(shot.project_id)
     response = await ollama.chat(
         model,
         with_director_skill(
@@ -393,6 +411,7 @@ async def analyze_ref_frame(
                 review_image_used=review_image is not None,
                 feedback=feedback,
                 global_prompt=global_prompt,
+                style_lock=style_lock,
             ),
             guides=(
                 "reference-strategy",
@@ -438,6 +457,9 @@ async def analyze_ref_frame(
     compiled = append_global_prompt(
         compile_visual_prompt(shot, brief, captions=captions), global_prompt
     )
+    # Hard backstop: even if the brief dropped the style, every shot carries the
+    # same lock so the project's frames cannot drift apart.
+    compiled = append_style_lock(compiled, style_lock)
     selected = [
         {"image": f"Image{index}", "file_key": key, "caption": captions[index - 1]}
         for index, (key, _value) in enumerate(ordered, start=1)

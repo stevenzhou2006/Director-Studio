@@ -1,6 +1,48 @@
-from app.core.h3.prompt import validate_h3_prompt, compose_h3_prompt
+from app.core.h3.prompt import (
+    validate_h3_prompt,
+    compose_h3_prompt,
+    ensure_audio_bindings_in_sections,
+)
 from app.core.projects.models import PromptSections
 import pytest
+
+
+def _sections(soundscape="E"):
+    return PromptSections(
+        subject_definitions="A",
+        summary="B",
+        retention_analysis="C",
+        detailed_description="D",
+        overall_soundscape=soundscape,
+        non_diegetic_music="F",
+    )
+
+
+def test_ensure_audio_bindings_adds_missing_tag():
+    sections = _sections()
+    fixed = ensure_audio_bindings_in_sections(sections, [(1, "recitation")])
+    text = compose_h3_prompt(fixed)
+    assert "<Audio 1>" in text
+    # now satisfies the audio contract that previously rejected the prompt
+    validate_h3_prompt(text, [], audio_count=1)
+
+
+def test_ensure_audio_bindings_is_idempotent():
+    sections = _sections(soundscape="bound to <Audio 1> already")
+    once = ensure_audio_bindings_in_sections(sections, [(1, "recitation")])
+    twice = ensure_audio_bindings_in_sections(once, [(1, "recitation")])
+    assert once.overall_soundscape == twice.overall_soundscape
+    assert compose_h3_prompt(twice).count("<Audio 1>") == 1
+
+
+def test_ensure_audio_bindings_only_adds_missing_indexes():
+    sections = _sections(soundscape="uses <Audio 1> but not the second voice")
+    fixed = ensure_audio_bindings_in_sections(
+        sections, [(1, "one"), (2, "two")]
+    )
+    text = compose_h3_prompt(fixed)
+    assert "<Audio 1>" in text and "<Audio 2>" in text
+    validate_h3_prompt(text, [], audio_count=2)
 
 
 def test_order_and_dialogue():

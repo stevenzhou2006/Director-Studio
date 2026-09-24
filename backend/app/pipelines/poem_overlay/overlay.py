@@ -319,13 +319,16 @@ def render_poem_title_still(
     work_dir: Path | None = None,
     margin_x: int | None = None,
     margin_y: int | None = None,
+    columns: list[str] | None = None,
 ) -> dict[str, int]:
-    """Composite the title card onto a still frame (PIL only, no ffmpeg).
+    """Composite the title card (and optional poem columns) onto a still frame.
 
     Places ``《title》`` + ``dynasty · author`` + rule + red seal in the upper-left
-    of ``input_path`` and writes ``output_path``. Used to give the layout reference
-    frame a deterministic, font-correct attribution while the model-rendered plate
-    stays text-free.
+    of ``input_path``. When ``columns`` is provided, each line is also rendered as
+    a traditional vertical column on the right side (read top-down, columns
+    right-to-left), matching the video overlay geometry — so a title-plus-first-line
+    shot shows its opening line on the still too. Writes ``output_path``. The
+    model-rendered plate stays text-free; all text is font-composited here.
     """
     clean_title = str(title or "").strip()
     clean_author = str(author or "").strip()
@@ -365,6 +368,26 @@ def render_poem_title_still(
         pos_x = int(margin_x) if margin_x is not None else round(36 * scale)
         pos_y = int(margin_y) if margin_y is not None else round(84 * scale)
         base.alpha_composite(card, (pos_x, pos_y))
+
+        clean_columns = [str(c).strip() for c in (columns or []) if str(c).strip()]
+        if clean_columns:
+            cell = max(1, round(54 * scale))
+            top_y = round(60 * scale)
+            step = round(66 * scale)
+            column_x = width - round(96 * scale)
+            for index, text in enumerate(clean_columns):
+                column_png, _ = _build_column(
+                    text,
+                    calligraphy=calligraphy,
+                    scale=scale,
+                    cell=cell,
+                    work_dir=temp_root,
+                    index=index,
+                )
+                column_img = Image.open(column_png).convert("RGBA")
+                base.alpha_composite(column_img, (column_x, top_y))
+                column_x -= step
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         base.save(output_path)

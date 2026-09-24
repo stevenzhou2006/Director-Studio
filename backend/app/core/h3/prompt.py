@@ -116,6 +116,42 @@ def compose_h3_prompt(sections: PromptSections) -> str:
     return "\n".join(parts)
 
 
+def ensure_audio_bindings_in_sections(
+    sections: PromptSections,
+    audio_bindings: Iterable[tuple[int, str]],
+) -> PromptSections:
+    """Deterministically bind every submitted voice as ``<Audio N>``.
+
+    The H3 contract requires each submitted audio index to be referenced in the
+    prompt (see ``validate_h3_prompt``). The writer LLM sometimes omits the tag,
+    which only surfaces as a submit-time rejection. This backstop appends an
+    explicit binding clause to ``overall_soundscape`` for any missing index so
+    the prompt is always submittable and the audio is bound to the on-screen
+    performance. Idempotent: a section that already references the tag is left
+    untouched.
+    """
+    bindings = [
+        (int(idx), (label or f"voice {idx}").strip())
+        for idx, label in audio_bindings
+    ]
+    if not bindings:
+        return sections
+    text = sections.as_ordered_text()
+    missing = [(idx, label) for idx, label in bindings if f"<Audio {idx}>" not in text]
+    if not missing:
+        return sections
+    clauses = [
+        f"The voice/recitation in <Audio {idx}> ({label}) is the authoritative "
+        "vocal performance for this shot; sync the on-screen mouth movement, "
+        "breath, and delivery timing to it."
+        for idx, label in missing
+    ]
+    base = (sections.overall_soundscape or "").strip()
+    addition = " ".join(clauses)
+    merged = f"{base} {addition}".strip() if base else addition
+    return sections.model_copy(update={"overall_soundscape": merged})
+
+
 def validate_h3_prompt(
     prompt: str,
     dialogue: list[str],

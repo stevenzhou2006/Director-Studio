@@ -1,8 +1,22 @@
 # Poem subtitle overlay (vertical calligraphy)
 
-Use `overlay_poem_subtitles` to burn a Tang-poem title card and traditional
-vertical calligraphy columns onto an existing clip. It is CPU only (ffmpeg +
-Pillow), so it never waits for the GPU.
+## Step 1 — record the poem on the Shot (`set_poem`)
+
+For any poem-recitation shot, call `set_poem` with the verified `title`, `author`,
+`dynasty`, and the ordered `lines` BEFORE you generate the Layout. This is what
+makes the text appear without asking the image model to draw it: the Layout gets a
+font-composited titled preview (《title》 + `dynasty · author` + seal, plus the
+opening line as a vertical column) while the H3-fed frame stays text-free. Line
+`start_s` is optional — it is auto-derived later from the bound recitation audio.
+Verify author/dynasty against a reliable source; never guess them.
+
+## Step 2 — burn synced subtitles onto the clip (`overlay_poem_subtitles`)
+
+Use `overlay_poem_subtitles` to burn the title card and traditional vertical
+calligraphy columns onto an existing clip. It reads the poem you recorded with
+`set_poem` (title/author/dynasty/seal/lines all fall back to the Shot), so you can
+call it with just the source. It is CPU only (ffmpeg + Pillow), so it never waits
+for the GPU.
 
 ## What it renders
 

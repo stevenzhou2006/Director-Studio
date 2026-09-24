@@ -4,8 +4,10 @@ from typing import Any
 
 from ...core.prompting import (
     append_global_prompt,
+    append_style_lock,
     effective_global_negative,
     effective_global_prompt,
+    effective_style_lock,
 )
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
@@ -103,6 +105,10 @@ class RefFramePipeline(Pipeline):
         description = append_global_prompt(
             description, effective_global_prompt(job.project_id)
         )
+        # Same lock on every Layout so the project's frames cannot drift in style.
+        description = append_style_lock(
+            description, effective_style_lock(job.project_id)
+        )
 
         image_keys = p.get("image_keys")
         if isinstance(image_keys, list) and image_keys:
@@ -179,6 +185,16 @@ class RefFramePipeline(Pipeline):
 
         source_path = Path(source)
         titled_path = source_path.with_name("layout_titled.png")
+        raw_lines = poem.get("lines")
+        columns: list[str] = []
+        if isinstance(raw_lines, list):
+            for item in raw_lines:
+                if isinstance(item, dict):
+                    text = str(item.get("text") or "").strip()
+                else:
+                    text = str(item or "").strip()
+                if text:
+                    columns.append(text)
         try:
             render_poem_title_still(
                 input_path=source_path,
@@ -187,6 +203,7 @@ class RefFramePipeline(Pipeline):
                 author=author,
                 dynasty=str(poem.get("dynasty") or "唐"),
                 seal_text=str(poem.get("seal") or "狸"),
+                columns=columns,
             )
         except (PoemOverlayError, OSError) as exc:
             params["warnings"] = list(params.get("warnings") or []) + [

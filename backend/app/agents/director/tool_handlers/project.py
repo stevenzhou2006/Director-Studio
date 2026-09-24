@@ -52,6 +52,35 @@ async def handle_project_tool(
         )
         return True
 
+    if name == "set_style_lock":
+        from ....core.prompting import derive_style_lock
+
+        style = str(args.get("style") or "").strip()
+        save_project(project.model_copy(update={"style_lock": style}))
+        actions.append("set_style_lock")
+        resolved = style or derive_style_lock(project.script_text or "")
+        if result_payloads is not None:
+            result_payloads.append(
+                {"ok": True, "style_lock": style, "effective_style": resolved}
+            )
+        if style:
+            notes.append(
+                f"Locked the project art style to: {style}. Every reference frame "
+                "now renders in exactly this style. Regenerate any Layout that "
+                "drifted from it."
+            )
+        elif resolved:
+            notes.append(
+                "Cleared the explicit style lock; the project now derives its "
+                f"style from the script: {resolved}."
+            )
+        else:
+            notes.append(
+                "Cleared the style lock and no style is derivable from the "
+                "script; shots may drift unless a style is set."
+            )
+        return True
+
     if name == "review_asset_coverage":
         from ....core.projects.models import AssetCoverageReviewSubmission
 

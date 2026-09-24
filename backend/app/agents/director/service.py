@@ -10,10 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
-from ...core.library.store import load_asset
+from ...core.library.store import load_asset, write_asset
 from ...core.h3.prompt import (
+    ensure_audio_bindings_in_sections,
     validate_required_picture_bindings,
     validate_tail_frame_transition_prompt,
 )
@@ -51,7 +54,8 @@ from ...core.projects.store import (
 from ...core.schemas import JobStatus, LibraryAsset
 from ...core.vram import get_director_model, get_orchestrator
 from .context_io import load_agent_context, save_agent_context
-from .visual_direction import analyze_ref_frame
+from .skill_loader import with_director_skill
+from .visual_direction import _json_object, analyze_ref_frame
 from .planner import (
     AssetMatchDraft,
     PlanProvider,
@@ -110,8 +114,68 @@ from ...core.prompting import (
     effective_global_prompt,
     global_prompt_block,
 )
+from .poem_meta import has_poem
 
 logger = logging.getLogger("director_studio.director")
+
+# A shot that talks about a title/attribution card but never recorded a structured
+# poem is the silent-failure signature behind a missing 片头 title: the titled
+# preview and the burned-in subtitle overlay both key off ``shot.meta.poem``, so
+# prose intent alone drops the title from the ref AND the H3 clip.
+_TITLE_CARD_CJK = re.compile(r"《[^》]+》")
+_TITLE_CARD_PHRASES = (
+    "title card",
+    "片头",
+    "片头标题",
+    "标题卡",
+    "attribution",
+    "作者",
+    "朝代",
+)
+
+
+def _poem_title_card_intent(shot: Shot) -> bool:
+    """True when the shot's authored text asks for a poem title/attribution card."""
+    text = " ".join(
+        part
+        for part in (shot.title, shot.script_beat, shot.composition)
+        if isinstance(part, str)
+    )
+    if not text.strip():
+        return False
+    if _TITLE_CARD_CJK.search(text):
+        return True
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in _TITLE_CARD_PHRASES)
+
+
+class LayoutCastQC(BaseModel):
+    """Structured result of a post-generation cast-count vision check."""
+
+    animal_count: int = 0
+    names_seen: list[str] = Field(default_factory=list)
+    has_duplicate: bool = False
+    extra_animals: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    passed: bool = False
+    notes: str = ""
+
+
+def _cast_qc_prompt(expected: list[str]) -> str:
+    cast = ", ".join(expected) if expected else "(none named)"
+    return (
+        "You are QC-ing one generated composition reference frame. The shot must "
+        f"contain EXACTLY {len(expected)} distinct animal/character(s): {cast}. "
+        "Inspect the image and count the distinct animals/characters actually "
+        "visible. Report: animal_count = how many distinct animals you see; "
+        "names_seen = which of the expected cast you can identify; "
+        "has_duplicate = true if any expected character appears more than once or "
+        "the same animal is cloned; extra_animals = descriptions of any animal "
+        "beyond the expected cast; missing = expected characters not present; "
+        "passed = true only if the count equals the expected cast with no "
+        "duplicates and no extras. Be strict about duplicates and extra animals. "
+        "Return only JSON."
+    )
 
 
 def _record_layout_generation_issue(shot: Shot, reasons: list[str]) -> Shot:
@@ -1283,6 +1347,26 @@ class DirectorService:
         if shot.status in {ShotStatus.queued, ShotStatus.running}:
             raise ValueError(f"shot {shot.id} has an active H3 job")
 
+        # A title/attribution card is composited from ``shot.meta.poem`` with real
+        # fonts; the image model and H3 are forbidden from drawing CJK. If the
+        # shot asks for a title card but no poem was recorded, the title would be
+        # silently dropped from both the ref and the clip. Block and instruct.
+        if _poem_title_card_intent(shot) and not has_poem(shot):
+            reason = (
+                "Shot text asks for a poem title/attribution card but "
+                "shot.meta.poem is not set. Call set_poem with the verified "
+                "title, author, dynasty, and ordered lines first, then "
+                "regenerate the Layout so the font-composited titled preview "
+                "and the burned-in title card are produced."
+            )
+            unavailable = _record_layout_generation_issue(shot, [reason])
+            save_shot(unavailable)
+            logger.warning(
+                "ref_frame blocked for %s: title-card intent without poem meta",
+                shot.id,
+            )
+            return unavailable
+
         compatibility_request = brief is None
         requested_brief = brief or LayoutBrief()
         uses_default_pack = not requested_brief.source_refs
@@ -1587,6 +1671,107 @@ class DirectorService:
             len(images),
         )
         return updated
+
+    async def qc_layout(self, shot_id: str, layout_ref_id: str | None = None) -> dict[str, Any]:
+        """Vision-check a generated Layout's cast count against the shot's actor refs.
+
+        Catches the duplicate/extra-character signature (for example one cat
+        cloned into two) that a positive prompt cannot prevent. Runs inside the
+        managed LLM session so it never fights the Comfy GPU reservation. The
+        result is written onto the Layout asset meta and the shot meta so the
+        review UI and the Director both see it.
+        """
+        shot = _find_shot(shot_id)
+        if shot is None:
+            raise ValueError(f"shot not found: {shot_id}")
+        target = None
+        if layout_ref_id:
+            target = next((l for l in shot.layout_refs if l.id == layout_ref_id), None)
+            if target is None:
+                raise ValueError(f"LayoutReference not found: {layout_ref_id}")
+        elif shot.layout_refs:
+            target = next(
+                (l for l in shot.layout_refs if l.asset_id),
+                shot.layout_refs[-1],
+            )
+        if target is None or not target.asset_id:
+            raise ValueError("no generated Layout to QC on this shot")
+
+        from .vision import _read_layout_bytes
+
+        pair = _read_layout_bytes(target.asset_id)
+        if pair is None:
+            raise ValueError(f"Layout {target.asset_id} has no readable image")
+
+        expected: list[str] = []
+        for ref in shot.refs:
+            if ref.role != RefRole.actor:
+                continue
+            asset = load_asset("actors", ref.asset_id)
+            if asset is not None and asset.name:
+                expected.append(asset.name)
+        if not expected:
+            return {
+                "layout_ref_id": target.id,
+                "skipped": True,
+                "reason": "shot has no named actor refs to check against",
+            }
+
+        runtime_provider = getattr(self.orchestrator, "provider", None)
+        model = (
+            get_director_model(runtime_provider.provider_id)
+            if runtime_provider is not None
+            else get_director_model()
+        )
+        vision_client = (
+            runtime_provider.client
+            if runtime_provider is not None
+            else getattr(self.plan_provider, "client", None)
+        )
+        from .vision import image_bytes_to_b64_jpeg
+
+        b64 = image_bytes_to_b64_jpeg(pair[1])
+        if b64 is None:
+            raise ValueError("could not encode Layout image for QC")
+
+        async with self.orchestrator.llm_session(release_on_exit=False):
+            await self.orchestrator.ensure_llm_ready()
+            response = await vision_client.chat(
+                model,
+                with_director_skill(
+                    _cast_qc_prompt(expected),
+                    guides=("visual-qc", "character-continuity"),
+                ),
+                images=[b64],
+                require_vision=True,
+                keep_alive="10m",
+                options={"temperature": 0.0},
+                format=LayoutCastQC.model_json_schema(),
+            )
+        await self.orchestrator.release_llm()
+
+        qc = LayoutCastQC.model_validate(json.loads(_json_object(response)))
+        result = {
+            "layout_ref_id": target.id,
+            "layout_asset_id": target.asset_id,
+            "expected_cast": expected,
+            **qc.model_dump(),
+        }
+
+        # Persist onto the Layout asset meta.
+        asset = load_asset("layouts", target.asset_id)
+        if asset is not None:
+            meta = dict(asset.meta or {})
+            meta["cast_qc"] = result
+            write_asset(asset.model_copy(update={"meta": meta}))
+
+        # Mirror onto the shot meta so the Director sees it without re-reading.
+        fresh = load_shot(shot.project_id, shot.id) or shot
+        meta = dict(fresh.meta or {})
+        meta.setdefault("layout_cast_qc", {})
+        meta["layout_cast_qc"][target.id] = result
+        save_shot(fresh.model_copy(update={"meta": meta}))
+        return result
 
     def _reference_authority_prefix(
         self,
@@ -2572,6 +2757,19 @@ class DirectorService:
                     exempt_text=global_prompt,
                 )
                 parsed = _apply_source_audio_contract(parsed, shot)
+                if not shot.source_audio_path:
+                    parsed = ensure_audio_bindings_in_sections(
+                        parsed,
+                        [
+                            (
+                                vr["audio_index"],
+                                vr.get("asset_name")
+                                or vr.get("speaker")
+                                or vr["asset_id"],
+                            )
+                            for vr in prompt_voice_refs
+                        ],
+                    )
                 ordered_text = parsed.as_ordered_text()
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_required_picture_bindings(

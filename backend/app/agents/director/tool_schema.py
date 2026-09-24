@@ -360,6 +360,47 @@ POEM_OVERLAY_TOOL = function_tool(
     required=["title", "author", "lines"],
 )
 
+SET_POEM_TOOL = function_tool(
+    "set_poem",
+    (
+        "Record the poem a Shot recites: title, author, dynasty, and the ordered "
+        "lines. This is what makes the poem text appear WITHOUT asking the image "
+        "model to draw it. The Layout reference frame then gets a font-composited "
+        "titled preview (《title》 + dynasty · author + seal, plus the opening line "
+        "as a vertical column) while the H3-fed frame stays text-free, and the H3 "
+        "video gets synced vertical subtitle columns. Call this for any "
+        "poem-recitation shot BEFORE queue_ref_frame. Verify the author/dynasty "
+        "against a reliable source; never guess them. Line start times are "
+        "auto-derived later from the bound recitation audio, so lines need only "
+        "their text."
+    ),
+    {
+        **SHOT_SELECTOR,
+        "title": {"type": "string", "minLength": 1},
+        "author": {"type": "string", "minLength": 1},
+        "dynasty": {"type": "string", "default": "唐"},
+        "seal": {"type": "string", "description": "Single-character red seal, default 狸."},
+        "lines": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "minLength": 1},
+                    "start_s": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Optional; auto-derived from ASR if omitted.",
+                    },
+                },
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    required=["title", "author", "lines"],
+)
+
 WEB_SEARCH_TOOL = function_tool(
     "web_search",
     (
@@ -640,6 +681,50 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool("get_status", "Read the current project and shot status."),
     SPEECH_TOOL,
     POEM_OVERLAY_TOOL,
+    SET_POEM_TOOL,
+    function_tool(
+        "set_style_lock",
+        (
+            "Lock one canonical art style for the whole project so every shot's "
+            "reference frame renders in exactly the same medium and palette. "
+            "Derive the style from the script's production brief (for example "
+            "'Chinese ink-wash blended with blue-green mineral colour wash on "
+            "rice paper') and call this BEFORE generating any Layout. The lock "
+            "is injected into every reference-frame generation automatically; "
+            "without it each shot picks its own style and the project drifts. "
+            "Pass an empty style to clear the lock and fall back to the "
+            "script-derived style."
+        ),
+        {
+            "style": {
+                "type": "string",
+                "description": (
+                    "One canonical art-style sentence for the whole project, or "
+                    "empty to clear the explicit lock."
+                ),
+            },
+        },
+        required=["style"],
+    ),
+    function_tool(
+        "qc_layout",
+        (
+            "Vision-check a generated Layout's cast count against the shot's "
+            "bound actor references. Run this on every Layout before accepting "
+            "it: it catches duplicated or extra characters (for example one cat "
+            "cloned into two) and missing cast that a positive prompt cannot "
+            "prevent. Returns the expected cast, the detected count, and whether "
+            "it passed. A failed QC means the Layout must be revised, not "
+            "accepted."
+        ),
+        {
+            **SHOT_SELECTOR,
+            "layout_ref_id": {
+                "type": "string",
+                "description": "Exact LayoutReference id to check; defaults to the shot's current Layout.",
+            },
+        },
+    ),
 ]
 
 
@@ -671,7 +756,8 @@ def director_tool_schemas(
         re.search(r"(?:shot\s*\d+|第\s*\d+\s*镜)", normalized)
         and re.search(
             r"(?:layout|reference(?:\s+frame)?|refs?\b|materials?\b|assets?\b|"
-            r"composition|构图|参考帧|首帧|素材|绑定|h3\b|prompt\b)",
+            r"composition|构图|参考帧|首帧|素材|绑定|h3\b|prompt\b|"
+            r"style|风格|画风)",
             normalized,
         )
     )
@@ -686,6 +772,8 @@ def director_tool_schemas(
             "accept_ref_frame",
             "revise_ref_frame",
             "write_prompt",
+            "set_style_lock",
+            "qc_layout",
             "get_status",
             "web_search",
         }

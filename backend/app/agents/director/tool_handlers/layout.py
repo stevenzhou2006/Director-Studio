@@ -34,7 +34,7 @@ from ..service import DirectorService
 
 logger = logging.getLogger("director_studio.director.tool_handlers.layout")
 
-_LAYOUT_TOOL_NAMES = frozenset({"accept_ref_frame", "revise_ref_frame", "queue_gpt_ref_frame", "queue_ref_frame", "ref_frame", "approve_layout", "approve", "write_prompt", "rewrite_prompt", "write_prompts", "reject_layout", "reject"})
+_LAYOUT_TOOL_NAMES = frozenset({"accept_ref_frame", "revise_ref_frame", "queue_gpt_ref_frame", "queue_ref_frame", "ref_frame", "approve_layout", "approve", "write_prompt", "rewrite_prompt", "write_prompts", "reject_layout", "reject", "qc_layout"})
 
 _LIBRARY_KIND_BY_ROLE = {
     "actor": "actors",
@@ -685,5 +685,59 @@ async def handle_layout_tool(
         notes.append(f"Rejected **{s2.title}**" + (f": {feedback}" if feedback else ""))
         touched.add(s2.id)
 
+    elif name == "qc_layout":
+        shot = resolve_shot(
+            shots,
+            shot_id=args.get("shot_id"),
+            shot_index=args.get("shot_index") or args.get("index"),
+            title=args.get("title"),
+        )
+        if not shot and len(shots) == 1:
+            shot = shots[0]
+        if not shot:
+            notes.append("qc_layout: specify a shot")
+            return True
+        layout_ref_id = str(args.get("layout_ref_id") or "").strip() or None
+        try:
+            result = await svc.qc_layout(shot.id, layout_ref_id)
+        except Exception as exc:
+            notes.append(f"qc_layout failed: {exc}")
+            if result_payloads is not None:
+                result_payloads.append({"ok": False, "error": str(exc)})
+            return True
+        actions.append(f"qc_layout:{shot.id}")
+        touched.add(shot.id)
+        if result_payloads is not None:
+            result_payloads.append({"ok": True, **result})
+        if result.get("skipped"):
+            notes.append(f"Cast QC skipped: {result.get('reason', '')}")
+        elif result.get("passed"):
+            notes.append(
+                f"Cast QC PASSED on {shot.title}: {result.get('animal_count')} "
+                f"animal(s) match the expected cast "
+                f"{', '.join(result.get('expected_cast', []))}."
+            )
+        else:
+            problems: list[str] = []
+            if result.get("has_duplicate"):
+                problems.append("a character is duplicated")
+            if result.get("extra_animals"):
+                problems.append(
+                    "extra animal(s): " + "; ".join(result["extra_animals"])
+                )
+            if result.get("missing"):
+                problems.append(
+                    "missing cast: " + ", ".join(result["missing"])
+                )
+            if not problems:
+                problems.append(
+                    f"detected {result.get('animal_count')} animal(s) but "
+                    f"expected {len(result.get('expected_cast', []))}"
+                )
+            notes.append(
+                f"Cast QC FAILED on **{shot.title}**: "
+                + "; ".join(problems)
+                + ". Do NOT accept this Layout — revise it with this feedback."
+            )
 
     return True

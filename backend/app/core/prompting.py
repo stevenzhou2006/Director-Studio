@@ -217,3 +217,87 @@ def _contains_direction(text: str, direction: str) -> bool:
     normalized = " ".join(text.split()).lower()
     needle = " ".join(direction.split()).lower()
     return needle in normalized
+
+
+STYLE_LOCK_MARKER = "PROJECT STYLE LOCK"
+
+# Keyword → canonical English style phrase. Scanned against the project script's
+# production brief so a project that names its art style in prose still gets a
+# machine-enforced lock even when no one set ``Project.style_lock`` explicitly.
+_STYLE_PHRASES: list[tuple[tuple[str, ...], str]] = [
+    (("水墨", "ink-wash", "ink wash", "shuimo"), "Chinese ink-wash (水墨) brush painting"),
+    (("青绿", "blue-green", "blue green", "qinglü", "qinglv"), "blue-green (青绿) mineral colour wash"),
+    (("工笔", "gongbi"), "meticulous gongbi (工笔) line work"),
+    (("写意", "xieyi", "freehand"), "freehand xieyi (写意) brushwork"),
+    (("水彩", "watercolor", "watercolour"), "translucent watercolour"),
+    (("油画", "oil painting", "oil paint"), "oil-painting texture"),
+    (("浮世绘", "ukiyo"), "ukiyo-e woodblock print"),
+    (("赛博朋克", "cyberpunk"), "neon cyberpunk"),
+    (("蒸汽朋克", "steampunk"), "brass steampunk"),
+    (("像素", "pixel art", "pixel-art"), "retro pixel art"),
+    (("3d", "3D", "三维", "cgi"), "polished 3D render"),
+]
+
+
+def derive_style_lock(script_text: str) -> str:
+    """Derive a canonical style sentence from a script's production brief.
+
+    Returns empty when no recognised style keyword is present, so callers can tell
+    "no derivable style" apart from an explicit lock.
+    """
+    text = (script_text or "")
+    if not text.strip():
+        return ""
+    lowered = text.lower()
+    matched: list[str] = []
+    for keywords, phrase in _STYLE_PHRASES:
+        if any(kw.lower() in lowered for kw in keywords):
+            if phrase not in matched:
+                matched.append(phrase)
+    if not matched:
+        return ""
+    if len(matched) == 1:
+        return matched[0]
+    return ", blended with ".join(matched)
+
+
+def effective_style_lock(project_id: str | None = None) -> str:
+    """Resolve the active style lock: explicit project field, else derived."""
+    if not project_id:
+        return ""
+    try:
+        from .projects.store import load_project
+
+        project = load_project(project_id)
+    except Exception:
+        return ""
+    if project is None:
+        return ""
+    explicit = (getattr(project, "style_lock", "") or "").strip()
+    if explicit:
+        return flatten_direction(explicit)
+    return derive_style_lock(project.script_text or "")
+
+
+def style_lock_block(style_lock: str) -> str:
+    """Formatted mandatory style block, or empty string when unset."""
+    text = (style_lock or "").strip()
+    if not text:
+        return ""
+    return (
+        f"{STYLE_LOCK_MARKER} (identical for every shot in this project; render "
+        f"in exactly this style and no other): {text}"
+    )
+
+
+def append_style_lock(base_prompt: str, style_lock: str) -> str:
+    """Append the style lock to a positive image prompt, de-duplicated."""
+    block = style_lock_block(style_lock)
+    if not block:
+        return (base_prompt or "").strip()
+    base = (base_prompt or "").strip()
+    if not base:
+        return block
+    if STYLE_LOCK_MARKER.lower() in base.lower():
+        return base
+    return f"{base}\n\n{block}"

@@ -1,5 +1,18 @@
 # Reference-frame generation
 
+## Lock the project style first
+
+Before generating any Layout, make sure the project has one canonical art style.
+Call `set_style_lock` with the style from the script's production brief (for
+example "Chinese ink-wash blended with blue-green mineral colour wash on rice
+paper"). The lock is injected into every reference-frame generation automatically,
+so all shots render in the same medium, palette, and background treatment. If the
+user says the shots look inconsistent (one ink-wash, one photoreal), the style was
+never locked: set it, then regenerate the drifted Layouts with `revise_ref_frame`.
+A photographic scene plate controls content and geography only — the style lock
+controls the rendering medium, so a photo plate under an ink-wash lock must still
+produce an ink-wash frame.
+
 ## Normal Qwen request
 
 For each Layout, state its purpose, the state it depicts, an optional time hint, and an ordered pack of one to three real source images. Map that ordered pack only to Qwen's fixed `image1`, `image2`, and `image3` inputs; there is no fourth source slot.

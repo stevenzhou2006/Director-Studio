@@ -38,6 +38,7 @@ from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
 from ..core.h3 import (
     compose_h3_prompt,
+    ensure_audio_bindings_in_sections,
     frames_for_audio_seconds,
     frames_for_seconds,
     validate_h3_prompt,
@@ -2148,6 +2149,23 @@ async def submit_shot_endpoint(
         )
         if cleaned_sections != shot.prompt_sections:
             shot = shot.model_copy(update={"prompt_sections": cleaned_sections})
+            save_shot(shot)
+
+    # Heal a stale/cached prompt that omitted a submitted voice's <Audio N> tag
+    # so a direct re-run is not blocked by the audio-binding contract.
+    if not shot.source_audio_path and shot.voice_refs:
+        audio_bindings = []
+        for vr in shot.voice_refs:
+            label = vr.speaker
+            if not label:
+                vasset = load_asset("voices", vr.asset_id)
+                label = vasset.name if vasset is not None else vr.asset_id
+            audio_bindings.append((vr.audio_index, label))
+        bound_sections = ensure_audio_bindings_in_sections(
+            shot.prompt_sections, audio_bindings
+        )
+        if bound_sections != shot.prompt_sections:
+            shot = shot.model_copy(update={"prompt_sections": bound_sections})
             save_shot(shot)
 
     try:

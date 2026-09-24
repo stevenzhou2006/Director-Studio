@@ -204,6 +204,10 @@ class Project(BaseModel):
     # Project-wide negative direction for image pipelines that support one.
     # Empty falls back to the app-wide persisted negative.
     global_negative: str = ""
+    # One canonical art style every shot's reference frame must render in. Empty
+    # falls back to a style derived from the script's production brief. Without a
+    # lock each shot's visual brief picks its own style and the project drifts.
+    style_lock: str = ""
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)

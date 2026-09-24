@@ -79,6 +79,19 @@ class Settings(BaseSettings):
     h3_minimax_retry_delay_sec: float = 2.0
     h3_minimax_max_request_mb: float = 64.0
 
+    # Optional Brave web search. When a key is set, the Director agent can look
+    # up current, factual, historical, cultural, and real-world information the
+    # local LLM cannot reliably supply, to ground scripts, actor/scene/prop
+    # designs, and poem overlays. Disabled until a key is configured.
+    brave_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DS_BRAVE_API_KEY", "BRAVE_API_KEY"),
+    )
+    brave_base_url: str = "https://api.search.brave.com"
+    brave_search_timeout_sec: float = 20.0
+    brave_search_default_count: int = 5
+    brave_search_max_results: int = 10
+
     # Optional local ChatGPT Browser Bridge. API_TOKEN is read at runtime from
     # the external env file and is never copied into Director Studio state.
     gpt_bridge_base_url: str | None = None
@@ -129,6 +142,10 @@ class Settings(BaseSettings):
     @property
     def gpt_bridge_configured(self) -> bool:
         return bool(self.gpt_bridge_base_url and self.gpt_bridge_env_file)
+
+    @property
+    def web_search_configured(self) -> bool:
+        return bool(self.brave_api_key and self.brave_api_key.strip())
 
 
 settings = Settings(_env_file=runtime_paths.env_file)

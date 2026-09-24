@@ -22,6 +22,7 @@ _TTS_TOOL_NAMES = frozenset({"generate_tts_audio", "generate_speech", "tts"})
 _OVERLAY_TOOL_NAMES = frozenset(
     {"overlay_poem_subtitles", "poem_overlay", "overlay_poem"}
 )
+_POEM_META_TOOL_NAMES = frozenset({"set_poem", "set_poem_metadata"})
 
 
 async def handle_audio_tool(
@@ -56,7 +57,71 @@ async def handle_audio_tool(
             result_payloads=result_payloads,
         )
         return True
+    if name in _POEM_META_TOOL_NAMES:
+        await _handle_set_poem(
+            args=args,
+            project_id=project_id,
+            actions=actions,
+            notes=notes,
+            result_payloads=result_payloads,
+        )
+        return True
     return False
+
+
+async def _handle_set_poem(
+    *,
+    args: dict[str, Any],
+    project_id: str,
+    actions: list[str],
+    notes: list[str],
+    result_payloads: list[dict[str, Any]] | None,
+) -> None:
+    """Record the poem on a Shot so the titled frame + synced subtitles work."""
+    from ..poem_meta import set_poem
+
+    shot = _resolve_target_shot(args, project_id)
+    if shot is None:
+        raise ValueError(
+            "set_poem requires a shot_id, shot_index, or title that matches a shot"
+        )
+    title = str(args.get("title") or "").strip()
+    author = str(args.get("author") or "").strip()
+    if not title or not author:
+        raise ValueError("set_poem requires title and author")
+    raw_lines = args.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        raise ValueError("set_poem requires ordered lines")
+
+    updated = set_poem(
+        shot,
+        {
+            "title": title,
+            "author": author,
+            "dynasty": str(args.get("dynasty") or "唐"),
+            "seal": str(args.get("seal") or "狸"),
+            "lines": raw_lines,
+        },
+    )
+    save_shot(updated)
+    poem = updated.meta["poem"]
+    actions.append(f"set_poem:{shot.id}")
+    if result_payloads is not None:
+        result_payloads.append(
+            {
+                "ok": True,
+                "shot_id": shot.id,
+                "title": poem["title"],
+                "author": poem["author"],
+                "dynasty": poem["dynasty"],
+                "line_count": len(poem["lines"]),
+            }
+        )
+    notes.append(
+        f"Recorded poem 《{poem['title']}》 · {poem['dynasty']}·{poem['author']} "
+        f"({len(poem['lines'])} line(s)) on {shot.id}. Regenerate the Layout "
+        f"(queue_ref_frame) to produce the font-composited titled preview."
+    )
 
 
 async def _handle_tts(

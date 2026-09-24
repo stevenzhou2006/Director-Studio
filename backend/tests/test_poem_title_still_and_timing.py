@@ -6,6 +6,9 @@ import pytest
 from PIL import Image
 
 from app.agents.director import poem_meta
+from app.agents.director.tool_handlers.audio import handle_audio_tool
+from app.core.projects.models import Shot, ShotStatus
+from app.core.projects.store import create_project, load_shot
 from app.core.schemas import JobRecord, JobStatus
 from app.pipelines.poem_overlay import timing
 from app.pipelines.poem_overlay.overlay import render_poem_title_still
@@ -183,3 +186,68 @@ def test_ref_frame_postprocess_noop_without_poem(tmp_path: Path):
     )
     pipeline.postprocess_job_outputs(job, saved)
     assert "layout_titled" not in saved
+
+
+@pytest.mark.asyncio
+async def test_director_set_poem_records_metadata(tmp_projects_dir):
+    project = create_project("Poem flow", "A cat recites a poem.")
+    shot = Shot(
+        id="sht_poem_1",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Title + Line 1",
+        script_beat="recites line 1",
+        duration_s=3.0,
+        status=ShotStatus.ref_frame_pending,
+    )
+    from app.core.projects.store import save_shot
+
+    save_shot(shot)
+
+    handled = await handle_audio_tool(
+        name="set_poem",
+        args={
+            "shot_id": shot.id,
+            "title": "相思",
+            "author": "王维",
+            "dynasty": "唐",
+            "lines": [{"text": "红豆生南国"}],
+        },
+        project_id=project.id,
+        runtime=None,
+        actions=[],
+        notes=[],
+        result_payloads=[],
+        images=None,
+    )
+    assert handled is True
+    reloaded = load_shot(project.id, shot.id)
+    poem = poem_meta.get_poem(reloaded)
+    assert poem["title"] == "相思"
+    assert poem["author"] == "王维"
+    assert poem["dynasty"] == "唐"
+    assert poem["seal"] == "狸"
+    assert poem["lines"][0]["text"] == "红豆生南国"
+
+
+@pytest.mark.asyncio
+async def test_director_set_poem_requires_matching_shot(tmp_projects_dir):
+    project = create_project("Poem flow 2", "x")
+    with pytest.raises(ValueError, match="matches a shot"):
+        await handle_audio_tool(
+            name="set_poem",
+            args={"shot_id": "sht_missing", "title": "a", "author": "b", "lines": [{"text": "x"}]},
+            project_id=project.id,
+            runtime=None,
+            actions=[],
+            notes=[],
+            result_payloads=None,
+            images=None,
+        )
+
+
+def test_set_poem_tool_is_registered():
+    from app.agents.director.tool_schema import DIRECTOR_TOOL_SCHEMAS
+
+    names = {t["function"]["name"] for t in DIRECTOR_TOOL_SCHEMAS}
+    assert "set_poem" in names

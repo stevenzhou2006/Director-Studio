@@ -55,6 +55,7 @@ from .tool_handlers.library import handle_library_tool
 from .tool_handlers.media import handle_media_tool
 from .tool_handlers.casting import handle_casting_tool
 from .tool_handlers.project import handle_project_tool
+from .tool_handlers.search import handle_search_tool
 
 logger = logging.getLogger("director_studio.director.tool_execution")
 ProgressFn = Callable[[dict[str, Any]], Awaitable[None]]
@@ -234,6 +235,15 @@ async def execute_tools(
                 actions=actions,
                 notes=notes,
                 touched=touched,
+            ):
+                continue
+            if await handle_search_tool(
+                name=name,
+                args=args,
+                project_id=project_id,
+                actions=actions,
+                notes=notes,
+                result_payloads=result_payloads,
             ):
                 continue
             notes.append(f"Unknown tool: {name}")

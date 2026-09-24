@@ -76,10 +76,23 @@ class PoemOverlayPipeline(ExternalPipeline):
         if not output_name.lower().endswith(".mp4"):
             output_name = f"{output_name}.mp4"
 
+        audio_input = inputs.get("audio")
+        if audio_input is not None:
+            audio_filename, audio_data = audio_input
+            if not audio_data:
+                raise ValueError("the attached replacement audio is empty")
+        else:
+            audio_filename, audio_data = None, None
+
         def _render(tmp_root: Path) -> tuple[bytes, dict[str, Any]]:
             source_path = tmp_root / "source.mp4"
             source_path.write_bytes(data)
             output_path = tmp_root / "overlay.mp4"
+            replacement_audio_path: Path | None = None
+            if audio_data is not None:
+                suffix = Path(audio_filename or "").suffix or ".wav"
+                replacement_audio_path = tmp_root / f"replacement{suffix}"
+                replacement_audio_path.write_bytes(audio_data)
             meta = overlay.render_poem_overlay(
                 input_path=source_path,
                 output_path=output_path,
@@ -99,6 +112,7 @@ class PoemOverlayPipeline(ExternalPipeline):
                     params.get("serif_font") or settings.poem_serif_font or None
                 ),
                 work_dir=tmp_root / "frames",
+                replacement_audio=replacement_audio_path,
             )
             return output_path.read_bytes(), meta
 

@@ -412,11 +412,17 @@ def render_poem_overlay(
     calligraphy_font: str | None = None,
     serif_font: str | None = None,
     work_dir: Path | None = None,
-) -> dict[str, float | int]:
+    replacement_audio: Path | None = None,
+) -> dict[str, float | int | bool]:
     """Render the title card and vertical poem columns onto ``input_path``.
 
     ``lines`` is an ordered list of ``(text, start_seconds)``. Returns render
     metadata (duration, column count, resolved dimensions).
+
+    When ``replacement_audio`` is given, the source video's audio track is
+    discarded and this exact recording is muxed in instead (padded with silence
+    to the video length). Without it the source audio is copied through
+    unchanged, so H3's natively generated audio is preserved.
     """
     clean_title = str(title or "").strip()
     clean_author = str(author or "").strip()
@@ -433,6 +439,10 @@ def render_poem_overlay(
     input_path = Path(input_path)
     if not input_path.is_file():
         raise PoemOverlayError(f"input video not found: {input_path}")
+    if replacement_audio is not None and not Path(replacement_audio).is_file():
+        raise PoemOverlayError(
+            f"replacement audio not found: {replacement_audio}"
+        )
 
     probe_width, probe_height, duration, has_audio = _probe_video(input_path)
     canvas_width = int(width) if width else probe_width
@@ -549,11 +559,27 @@ def render_poem_overlay(
             f"enable='between(t,{last_end - 0.01:.2f},{seal_fade_out + 0.81:.2f})'[vout]"
         )
 
+        audio_input_index: int | None = None
+        if replacement_audio is not None:
+            # Inputs: 0=source video, 1=title, 2..N+1=columns, N+2=seal.
+            audio_input_index = len(clean_lines) + 3
+            inputs = [*inputs, "-i", str(replacement_audio)]
+            # Pad to a finite length: an infinite apad combined with the
+            # looped-PNG overlay graph never lets -shortest terminate.
+            pad_to = duration if duration > 0 else 3600.0
+            parts.append(f"[{audio_input_index}:a:0]apad=whole_dur={pad_to}[arep]")
+
         filter_complex = ";".join(parts)
         command = ["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", filter_complex]
         command += ["-map", "[vout]"]
-        if has_audio:
+        if audio_input_index is not None:
+            command += ["-map", "[arep]", "-c:a", "aac", "-b:a", "192k"]
+        elif has_audio:
             command += ["-map", "0:a", "-c:a", "copy"]
+        # Hard output-duration cap. ffmpeg 6.x never lets -shortest terminate a
+        # graph that mixes -loop 1 stills with apad, so bound the mux explicitly.
+        if duration > 0:
+            command += ["-t", f"{duration:.3f}"]
         command += [
             "-shortest",
             "-c:v",
@@ -570,9 +596,19 @@ def render_poem_overlay(
             "+faststart",
             str(output_path),
         ]
-        result = subprocess.run(
-            command, capture_output=True, text=True, check=False
-        )
+        encode_timeout = max(300.0, duration * 60.0)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=encode_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PoemOverlayError(
+                f"ffmpeg overlay timed out after {encode_timeout:.0f}s"
+            ) from exc
         if result.returncode != 0:
             raise PoemOverlayError(
                 f"ffmpeg overlay failed: {result.stderr.strip()[-800:]}"
@@ -586,4 +622,5 @@ def render_poem_overlay(
         "line_count": len(clean_lines),
         "width": canvas_width,
         "height": canvas_height,
+        "audio_replaced": replacement_audio is not None,
     }

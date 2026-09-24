@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ....core.jobs.store import load_job
 from ....core.library.audio import probe_audio
 from ....core.library.store import load_asset
 from ....core.media.clip_generations import (
@@ -566,6 +567,19 @@ def _resolve_overlay_source(
                 source_shot_id=source_shot_id,
                 output_kind=output_kind,  # type: ignore[arg-type]
             )
+        if output_kind is None and _job_poem_finalized(resolved.source_job_id):
+            # The enhanced clip already carries the font layer; re-overlaying it
+            # would double-burn the text. Fall back to the untouched raw render.
+            try:
+                resolved = resolve_source_clip(
+                    project_id=project_id,
+                    source_shot_id=source_shot_id,
+                    source_version=None,
+                    source_job_id=resolved.source_job_id,
+                    output_kind="raw",
+                )
+            except ClipGenerationError:
+                pass
         return str(resolved.path), f"shot {source_shot_id} ({resolved.source_filename})"
 
     job = _load_project_job(runtime, source_job_id, project_id)
@@ -575,11 +589,23 @@ def _resolve_overlay_source(
         raise ValueError(
             f"source job {source_job_id} is {job.status.value}, not succeeded"
         )
-    key = "video" if "video" in job.outputs else "video_raw"
+    if (
+        output_kind is None
+        and "video_raw" in job.outputs
+        and (job.params or {}).get("poem_finalized")
+    ):
+        key = "video_raw"
+    else:
+        key = "video" if "video" in job.outputs else "video_raw"
     slot = job.outputs.get(key)
     if slot is None or not slot.path:
         raise ValueError(f"source job {source_job_id} has no materialized video output")
     return slot.path, f"job {source_job_id}"
+
+
+def _job_poem_finalized(job_id: str) -> bool:
+    job = load_job(job_id)
+    return bool(job is not None and (job.params or {}).get("poem_finalized"))
 
 
 def _load_project_job(

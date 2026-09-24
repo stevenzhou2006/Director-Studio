@@ -2,11 +2,16 @@
 
 C1: ref_frame succeeded → library layout (pending_review) + shot needs_review
 C2: h3_ref2va terminal → shot status succeeded/failed when h3_job_id matches
+C3: h3_ref2va succeeded → auto poem finalize (font layer + original audio)
+C4: poem_overlay succeeded → write the finalized clip back onto its H3 job
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+from pathlib import Path
 
 from ...pipelines.registry import get_pipeline
 from ..projects.layouts import (
@@ -18,7 +23,8 @@ from ..projects.layouts import (
 from ..projects.models import Shot, ShotStatus
 from ..projects.store import list_projects, list_shots, load_shot, save_shot
 from ..projects.transitions import ensure_layout_ref
-from ..schemas import JobRecord, JobStatus
+from ..schemas import JobRecord, JobStatus, OutputSlot
+from .store import job_dir, load_job, save_job
 
 logger = logging.getLogger("director_studio.jobs.shot_sync")
 
@@ -42,6 +48,8 @@ def on_pipeline_job_terminal(job: JobRecord) -> None:
         _sync_ref_frame(job)
     elif job.pipeline_id == "h3_ref2va":
         _sync_h3_ref2va(job)
+    elif job.pipeline_id == "poem_overlay":
+        _sync_poem_overlay(job)
 
 
 def _sync_ref_frame(job: JobRecord) -> None:
@@ -328,6 +336,116 @@ def _sync_h3_ref2va(job: JobRecord) -> None:
         shot.id,
         new_status.value,
     )
+
+    if new_status == ShotStatus.succeeded:
+        from .poem_finalize import schedule_poem_finalize
+
+        schedule_poem_finalize(job, updated)
+
+
+def _sync_poem_overlay(job: JobRecord) -> None:
+    """C4: write a succeeded finalize overlay back onto its H3 job's slots.
+
+    The finalized clip becomes the H3 job's canonical ``video`` (enhanced)
+    output so concat/tail-frame pick it up unchanged; the untouched H3
+    render is preserved as ``video_raw``.
+    """
+    if job.status != JobStatus.succeeded:
+        return
+    params = job.params or {}
+    h3_job_id = params.get("source_h3_job_id")
+    if not isinstance(h3_job_id, str) or not h3_job_id:
+        return
+
+    h3_job = load_job(h3_job_id)
+    if h3_job is None or h3_job.status != JobStatus.succeeded:
+        logger.warning(
+            "poem overlay %s references unusable h3 job %s", job.id, h3_job_id
+        )
+        return
+    if (h3_job.params or {}).get("poem_finalized") == job.id:
+        return
+
+    overlay_slot = (job.outputs or {}).get("video")
+    overlay_path = _slot_materialized_path(job, overlay_slot)
+    if overlay_path is None:
+        logger.warning(
+            "poem overlay %s has no materialized video output to write back",
+            job.id,
+        )
+        return
+
+    video_slot = (h3_job.outputs or {}).get("video")
+    if video_slot is None:
+        logger.warning(
+            "poem overlay %s: h3 job %s has no video slot to finalize",
+            job.id,
+            h3_job_id,
+        )
+        return
+
+    out_dir = job_dir(h3_job.id, project_id=h3_job.project_id) / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    video_name = video_slot.filename or (
+        Path(video_slot.path).name if video_slot.path else "video.mp4"
+    )
+    raw_name = f"{Path(video_name).stem}_raw{Path(video_name).suffix or '.mp4'}"
+    current = out_dir / video_name
+    raw_target = out_dir / raw_name
+
+    try:
+        if current.is_file():
+            os.replace(current, raw_target)
+        shutil.copyfile(overlay_path, current)
+    except OSError as exc:
+        logger.error(
+            "poem overlay %s write-back failed for h3 job %s: %s",
+            job.id,
+            h3_job_id,
+            exc,
+        )
+        return
+
+    outputs = dict(h3_job.outputs or {})
+    outputs["video"] = OutputSlot(
+        key="video",
+        label=video_slot.label or "H3 Ref2AV Video",
+        path=str(current),
+        filename=video_name,
+        url=f"/api/files/jobs/{h3_job.id}/outputs/{video_name}",
+    )
+    outputs["video_raw"] = OutputSlot(
+        key="video_raw",
+        label="Raw H3 output (pre-finalize)",
+        path=str(raw_target),
+        filename=raw_name,
+        url=f"/api/files/jobs/{h3_job.id}/outputs/{raw_name}",
+    )
+    updated = h3_job.model_copy(
+        update={
+            "outputs": outputs,
+            "params": {**(h3_job.params or {}), "poem_finalized": job.id},
+        }
+    )
+    save_job(updated)
+    logger.info(
+        "poem overlay %s finalized h3 job %s (raw kept as %s)",
+        job.id,
+        h3_job_id,
+        raw_name,
+    )
+
+
+def _slot_materialized_path(job: JobRecord, slot: OutputSlot | None) -> Path | None:
+    if slot is None:
+        return None
+    if slot.path and Path(slot.path).is_file():
+        return Path(slot.path)
+    name = slot.filename or (Path(slot.path).name if slot.path else "")
+    if not name:
+        return None
+    candidate = job_dir(job.id, project_id=job.project_id) / "outputs" / name
+    return candidate if candidate.is_file() else None
 
 
 def _find_related_shot(job: JobRecord, *, job_id_field: str) -> Shot | None:

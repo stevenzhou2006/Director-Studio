@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     job_timeout_sec: float = 1800.0
     max_upload_mb: int = 20
 
+    # Qwen3-TTS saved-speaker voices directory on the ComfyUI host
+    # (FB_Qwen3TTSSaveVoice / FB_Qwen3TTSLoadSpeaker read+write here).
+    qwen_tts_voices_dir: Path = Path("/home/steven/repos/ComfyUI/models/qwen-tts/voices")
+
     # Poem subtitle overlay fonts. Empty = auto-detect (vendored Ma Shan Zheng
     # calligraphy font + Noto Serif CJK on the host).
     poem_calligraphy_font: str = ""

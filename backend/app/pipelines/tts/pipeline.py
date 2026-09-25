@@ -15,6 +15,29 @@ from . import workflow
 _H3_REF_MIN_S = 2.0
 _H3_REF_MAX_S = 15.0
 
+# ffmpeg atempo supports 0.5–2.0 per filter; keep the UI within that range.
+SPEED_MIN = 0.5
+SPEED_MAX = 2.0
+SPEED_STEP = 0.1
+
+
+def _non_negative_float(value: Any) -> float:
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if result > 0 else 0.0
+
+
+def _speed_or_default(value: Any) -> float:
+    try:
+        speed = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if speed < SPEED_MIN or speed > SPEED_MAX:
+        return 1.0
+    return speed
+
 
 class TtsPipeline(Pipeline):
     id = "tts"
@@ -41,16 +64,19 @@ class TtsPipeline(Pipeline):
         *,
         uploaded_images: dict[str, str],
     ) -> tuple[dict[str, Any], int]:
-        del uploaded_images
         params = job.params or {}
-        text = str(params.get("text") or "").strip()
-        if not text:
-            raise ValueError("text is required")
         style = str(params.get("style") or "longchang-girl").strip()
         if style not in workflow.STYLES:
             raise ValueError(
                 f"unsupported style {style!r}; expected one of {', '.join(workflow.STYLES)}"
             )
+        if style == "register-speaker":
+            return self._build_register(job, uploaded_images)
+        if style == "saved-speaker":
+            return self._build_saved_speaker(job)
+        text = str(params.get("text") or "").strip()
+        if not text:
+            raise ValueError("text is required")
         instruct, pairs, warnings = workflow.build_instruct(
             style=style,
             text=text,
@@ -80,6 +106,68 @@ class TtsPipeline(Pipeline):
         )
         return prompt, seed
 
+    def _build_register(
+        self, job: JobRecord, uploaded_images: dict[str, str]
+    ) -> tuple[dict[str, Any], int]:
+        params = job.params or {}
+        ref_audio_name = str(uploaded_images.get("reference") or "").strip()
+        if not ref_audio_name:
+            raise ValueError("register-speaker requires an uploaded reference audio")
+        slug = str(params.get("slug") or "").strip()
+        if not slug:
+            raise ValueError("register-speaker requires a slug")
+        prompt = workflow.build_register_speaker_prompt(
+            ref_audio_name=ref_audio_name,
+            ref_text=str(params.get("ref_text") or ""),
+            slug=slug,
+            job_id=job.id,
+        )
+        return prompt, int(job.seed or 0)
+
+    def _build_saved_speaker(self, job: JobRecord) -> tuple[dict[str, Any], int]:
+        params = job.params or {}
+        speaker_wav = str(params.get("speaker_wav") or "").strip()
+        if not speaker_wav:
+            raise ValueError("saved-speaker requires speaker_wav")
+        text = str(params.get("text") or "").strip()
+        if not text:
+            raise ValueError("text is required")
+        return workflow.build_speaker_speak_prompt(
+            speaker_wav=speaker_wav,
+            text=text,
+            seed=job.seed,
+            job_id=job.id,
+            language=str(params.get("language") or "Chinese"),
+            top_p=float(params.get("top_p") or 0.8),
+            top_k=int(params.get("top_k") or 20),
+            temperature=float(params.get("temperature") or 1.0),
+            repetition_penalty=float(params.get("repetition_penalty") or 1.05),
+        )
+
+    def on_job_succeeded(self, job: JobRecord) -> None:
+        """Mark the speaker ready once its engine files have been written."""
+        params = job.params or {}
+        if str(params.get("style") or "") != "register-speaker":
+            return
+        spk_id = str(params.get("speaker_id") or "").strip()
+        project_id = str(params.get("project_id") or job.project_id or "").strip()
+        if not spk_id or not project_id:
+            return
+        from . import speakers
+
+        try:
+            if speakers.speaker_is_ready(spk_id):
+                speakers.set_status(project_id, spk_id, speakers.SPEAKER_STATUS_READY)
+            else:
+                speakers.set_status(
+                    project_id,
+                    spk_id,
+                    speakers.SPEAKER_STATUS_FAILED,
+                    error="registration finished but engine voice files are missing",
+                )
+        except ValueError:
+            pass
+
     def map_history_outputs(
         self,
         history: dict[str, Any],
@@ -91,13 +179,18 @@ class TtsPipeline(Pipeline):
     def postprocess_job_outputs(
         self, job: JobRecord, saved: dict[str, Any]
     ) -> None:
-        """Pad the recitation with lead silence for H3 mouth-sync handoff."""
+        """Apply speed + lead/tail silence for H3 mouth-sync handoff.
+
+        Qwen3-TTS has no native rate control, so the tempo change is done with
+        ffmpeg ``atempo``. The padded track is keyed ``audio_padded`` so
+        ``enrich_job_urls`` and ``save_asset_from_job`` (which glob by key)
+        keep it.
+        """
         params = job.params or {}
-        try:
-            lead = float(params.get("lead_silence_s") or 0.0)
-        except (TypeError, ValueError):
-            lead = 0.0
-        if lead <= 0:
+        lead = _non_negative_float(params.get("lead_silence_s"))
+        tail = _non_negative_float(params.get("tail_silence_s"))
+        speed = _speed_or_default(params.get("speed"))
+        if lead <= 0 and tail <= 0 and abs(speed - 1.0) < 1e-3:
             return
         source = saved.get("audio")
         if not source:
@@ -105,11 +198,18 @@ class TtsPipeline(Pipeline):
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             params["warnings"] = list(params.get("warnings") or []) + [
-                "ffmpeg unavailable; lead silence was not added"
+                "ffmpeg unavailable; speed/silence were not applied"
             ]
             return
         source_path = Path(source)
-        destination = source_path.with_name(f"{source_path.stem}_pad.flac")
+        destination = source_path.with_name(f"{source_path.stem}_padded.flac")
+        filters: list[str] = []
+        if abs(speed - 1.0) >= 1e-3:
+            filters.append(f"atempo={speed:.3f}")
+        if lead > 0:
+            filters.append(f"adelay={round(lead * 1000)}:all=1")
+        if tail > 0:
+            filters.append(f"apad=pad_dur={tail:.3f}")
         result = subprocess.run(
             [
                 ffmpeg,
@@ -119,7 +219,7 @@ class TtsPipeline(Pipeline):
                 "-i",
                 str(source_path),
                 "-af",
-                f"adelay={round(lead * 1000)}",
+                ",".join(filters),
                 "-c:a",
                 "flac",
                 str(destination),
@@ -130,6 +230,10 @@ class TtsPipeline(Pipeline):
         )
         if result.returncode == 0 and destination.is_file():
             saved["audio_padded"] = destination
+        else:
+            params["warnings"] = list(params.get("warnings") or []) + [
+                "ffmpeg failed; speed/silence were not applied"
+            ]
 
     def library_meta(self, job: JobRecord) -> dict[str, Any]:
         return dict(job.params or {})
@@ -178,6 +282,8 @@ class TtsPipeline(Pipeline):
                 "duration_s": duration_s,
                 "h3_ready": h3_ready,
                 "h3_file_key": h3_file_key,
+                "speaker_id": params.get("speaker_id"),
+                "speaker_name": params.get("speaker_name"),
             },
             project_id=resolved,
         )

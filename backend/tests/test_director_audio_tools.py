@@ -35,6 +35,7 @@ def test_speech_and_overlay_tools_are_exposed_with_expected_contracts():
         "longchang-girl",
         "eric",
         "custom",
+        "saved-speaker",
     ]
     assert speech["properties"]["style"]["default"] == "longchang-girl"
 
@@ -517,4 +518,100 @@ async def test_overlay_poem_subtitles_requires_a_source(tmp_projects_dir):
             notes=[],
             result_payloads=None,
             images=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_tts_audio_saved_speaker_resolves_registered_voice(
+    tmp_projects_dir, tmp_path, monkeypatch
+):
+    from app.config import settings
+    from app.pipelines.tts import speakers as speaker_registry
+
+    voices = tmp_path / "voices"
+    voices.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "qwen_tts_voices_dir", voices)
+
+    project = create_project("Clone", "A dialect film.")
+    speaker = speaker_registry.create_speaker(
+        project_id=project.id,
+        name="隆昌女孩",
+        ref_text="红豆生南国",
+        ref_audio_bytes=b"fake-audio",
+        source_filename="a.wav",
+    )
+    (voices / f"{speaker['slug']}.qvp").write_bytes(b"f")
+    (voices / f"{speaker['slug']}.wav").write_bytes(b"a")
+
+    terminal = JobRecord(
+        id="job_clone_1",
+        pipeline_id="tts",
+        asset_kind="voices",
+        status=JobStatus.succeeded,
+        name="Speech",
+        created_at=_NOW,
+        updated_at=_NOW,
+        project_id=project.id,
+        params={"style": "saved-speaker", "warnings": []},
+        outputs={
+            "audio": OutputSlot(
+                key="audio",
+                label="Speech audio",
+                url="/api/files/jobs/job_clone_1/outputs/audio.flac",
+            )
+        },
+    )
+    runtime = _Runtime(terminal=terminal, pipeline=_TtsPipeline())
+    payloads: list[dict] = []
+
+    await handle_audio_tool(
+        name="generate_tts_audio",
+        args={
+            "text": "床前明月光",
+            "style": "saved-speaker",
+            "speaker": "隆昌女孩",
+        },
+        project_id=project.id,
+        runtime=runtime,
+        actions=[],
+        notes=[],
+        result_payloads=payloads,
+        images=[],
+    )
+
+    assert runtime.created["params"]["speaker_id"] == speaker["id"]
+    assert runtime.created["params"]["speaker_wav"] == f"{speaker['slug']}.wav"
+    assert payloads[0]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_tts_audio_saved_speaker_requires_known_voice(
+    tmp_projects_dir,
+):
+    project = create_project("Clone", "A dialect film.")
+    runtime = _Runtime(terminal=JobRecord(
+        id="job_x2", pipeline_id="tts", asset_kind="voices",
+        status=JobStatus.succeeded, name="x", created_at=_NOW, updated_at=_NOW,
+    ))
+    with pytest.raises(ValueError, match="saved-speaker.*requires 'speaker'"):
+        await handle_audio_tool(
+            name="generate_tts_audio",
+            args={"text": "hi", "style": "saved-speaker"},
+            project_id=project.id,
+            runtime=runtime,
+            actions=[],
+            notes=[],
+            result_payloads=[],
+            images=[],
+        )
+    with pytest.raises(ValueError, match="No saved speaker matches"):
+        await handle_audio_tool(
+            name="generate_tts_audio",
+            args={"text": "hi", "style": "saved-speaker", "speaker": "ghost"},
+            project_id=project.id,
+            runtime=runtime,
+            actions=[],
+            notes=[],
+            result_payloads=[],
+            images=[],
         )

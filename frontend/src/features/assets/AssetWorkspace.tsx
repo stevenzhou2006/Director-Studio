@@ -6,6 +6,7 @@ import { PropsPage } from "../props/PropsPage";
 import { SetDesignPage } from "../set/SetDesignPage";
 import { LibraryOverview } from "./LibraryOverview";
 import { AssetImportDialog } from "../library/AssetImportDialog";
+import { VoiceStudio } from "../voice/VoiceStudio";
 
 type PreparedAssetCategory = Exclude<LibraryKind, "layouts" | "costumes">;
 type AssetCategory = "library" | PreparedAssetCategory;
@@ -87,13 +88,7 @@ export function AssetWorkspace() {
               {workflowCategory === "actors" ? <CastingPage onOpenLibrary={() => setCategory("library")} /> : null}
               {workflowCategory === "scenes" ? <SetDesignPage onOpenLibrary={() => setCategory("library")} /> : null}
               {workflowCategory === "props" ? <PropsPage onOpenLibrary={() => setCategory("library")} /> : null}
-              {workflowCategory === "voices" ? (
-                <div className="asset-guidance-card">
-                  <div className="workspace-kicker">Voice preparation</div>
-                  <h2>Import a clean performance sample</h2>
-                  <p>Two to fifteen seconds with a clear speaker name gives the Director a reliable casting reference.</p>
-                </div>
-              ) : null}
+              {workflowCategory === "voices" ? <VoiceStudio /> : null}
             </div>
             );
           })}

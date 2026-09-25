@@ -169,6 +169,90 @@ def test_postprocess_pads_lead_silence_for_h3(tmp_path: Path):
     assert Path(padded).is_file()
 
 
+def _probe_duration(path: Path) -> float:
+    import subprocess
+
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(out.stdout.strip())
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg + ffprobe required",
+)
+def test_postprocess_speed_and_tail_silence(tmp_path: Path):
+    pipeline = TtsPipeline()
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(_wav_bytes(4.0))
+    job = JobRecord(
+        id="job_tts_speed",
+        pipeline_id="tts",
+        asset_kind="voices",
+        status=JobStatus.succeeded,
+        name="recite",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        params={"speed": 2.0, "tail_silence_s": 1.0},
+    )
+    saved: dict[str, object] = {"audio": audio}
+
+    pipeline.postprocess_job_outputs(job, saved)
+
+    padded = saved.get("audio_padded")
+    assert padded is not None and Path(padded).is_file()
+    # 4s at 2x = 2s, plus 1s tail = ~3s.
+    assert abs(_probe_duration(Path(padded)) - 3.0) < 0.3
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg + ffprobe required",
+)
+def test_postprocess_noop_at_default_speed(tmp_path: Path):
+    pipeline = TtsPipeline()
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(_wav_bytes(2.0))
+    job = JobRecord(
+        id="job_tts_default",
+        pipeline_id="tts",
+        asset_kind="voices",
+        status=JobStatus.succeeded,
+        name="recite",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        params={"speed": 1.0},
+    )
+    saved: dict[str, object] = {"audio": audio}
+
+    pipeline.postprocess_job_outputs(job, saved)
+
+    assert "audio_padded" not in saved
+
+
+def test_speed_helpers_clamp_out_of_range():
+    from app.pipelines.tts.pipeline import _speed_or_default
+
+    assert _speed_or_default(None) == 1.0
+    assert _speed_or_default("garbage") == 1.0
+    assert _speed_or_default("0.2") == 1.0  # below min -> default
+    assert _speed_or_default("3") == 1.0  # above max -> default
+    assert _speed_or_default("1.5") == 1.5
+
+
 def _save_job(duration_s: float) -> JobRecord:
     return JobRecord(
         id="job_tts_save",

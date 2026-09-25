@@ -4,6 +4,7 @@ from ..pipelines.actor.router import router as actor_router
 from ..pipelines.h3_ref2va.router import router as h3_ref2va_router
 from ..pipelines.prop.router import router as prop_router
 from ..pipelines.scene.router import router as scene_router
+from ..pipelines.tts.router import router as tts_router
 from .director import router as director_router
 from .files import router as files_router
 from .health import router as health_router
@@ -28,4 +29,5 @@ def build_api_router() -> APIRouter:
     api.include_router(json_production_router)
     api.include_router(director_router)
     api.include_router(library_router)
+    api.include_router(tts_router)
     return api

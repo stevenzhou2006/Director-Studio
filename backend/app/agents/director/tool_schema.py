@@ -221,11 +221,14 @@ SPEECH_TOOL = function_tool(
     "generate_tts_audio",
     (
         "Generate speech or recitation audio through the local ComfyUI Qwen3-TTS "
-        "service. Use it for poem recitation, narration, dialect voice-over, or any "
+        "service. Use it for poem recitation, dialect voice-over, or any "
         "audio the production needs. style='longchang-girl' is the verified "
         "四川隆昌小女孩 dialect recipe and REQUIRES respell pairs taken from the "
         "poem's own characters (e.g. '长=藏,深=森,知=资'); style='eric' uses the "
-        "native Sichuan CustomVoice speaker; style='custom' uses your own instruct. "
+        "native Sichuan CustomVoice speaker; style='custom' uses your own instruct; "
+        "style='saved-speaker' speaks ANY text with a voice the user registered in "
+        "this project's Voice Studio (pass its speaker id or exact name in "
+        "'speaker' — the saved ref_text loads automatically, no respell needed). "
         "lead_silence_s prepends silence for an H3 mouth-sync reference. The audio "
         "is saved as a Voice asset in this project's library. Always pass shot_id (or "
         "shot_index/title) for the Shot this line is spoken in: the saved Voice is "
@@ -243,7 +246,7 @@ SPEECH_TOOL = function_tool(
         "name": {"type": "string", "description": "Voice asset name."},
         "style": {
             "type": "string",
-            "enum": ["longchang-girl", "eric", "custom"],
+            "enum": ["longchang-girl", "eric", "custom", "saved-speaker"],
             "default": "longchang-girl",
         },
         "respell": {
@@ -259,7 +262,11 @@ SPEECH_TOOL = function_tool(
         "age": {"type": "string"},
         "speaker": {
             "type": "string",
-            "description": "CustomVoice speaker when style='eric' (default Eric).",
+            "description": (
+                "CustomVoice speaker when style='eric' (default Eric). Required "
+                "when style='saved-speaker': the registered speaker's id "
+                "(spk_...) or exact name from this project's Voice Studio."
+            ),
         },
         "instruct": {
             "type": "string",
@@ -271,6 +278,22 @@ SPEECH_TOOL = function_tool(
             "minimum": 0,
             "default": 0,
             "description": "Seconds of silence prepended for H3 mouth-sync.",
+        },
+        "tail_silence_s": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "description": "Seconds of silence appended after the line.",
+        },
+        "speed": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 2.0,
+            "default": 1.0,
+            "description": (
+                "Playback rate multiplier (0.5 = half speed, 2.0 = double). "
+                "Applied with ffmpeg atempo after generation."
+            ),
         },
         "model_choice": {
             "type": "string",

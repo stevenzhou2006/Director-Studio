@@ -16,7 +16,26 @@ from ...core.schemas import ComfyImageRef
 NODE_TTS = "15"
 NODE_SAVE = "11"
 
-STYLES = ("longchang-girl", "eric", "custom")
+# Speaker registration graph (reference audio -> reusable saved speaker).
+NODE_REF_LOAD = "20"
+NODE_CLONE_PROMPT = "21"
+NODE_VOICE_SAVE = "22"
+
+# Saved-speaker speech graph (LoadSpeaker -> VoiceClone -> SaveAudio).
+NODE_SPEAKER_LOAD = "15"
+NODE_SPEAKER_CLONE = "16"
+
+STYLES = (
+    "longchang-girl",
+    "eric",
+    "custom",
+    "saved-speaker",
+    "register-speaker",
+)
+
+# The saved-speaker clone flow is locked to the Base model that produced the
+# stored .qvp features; mixing model sizes silently degrades or breaks cloning.
+SPEAKER_MODEL_CHOICE = "1.7B"
 
 DEFAULT_AGE = "六七岁"
 DEFAULT_RHYME = "韵脚字拖长音，"
@@ -176,6 +195,137 @@ def build_tts_prompt(
             "inputs": {
                 "filename_prefix": f"director-studio/{safe_job}/tts",
                 "audio": [NODE_TTS, 0],
+            },
+        },
+    }
+    return prompt, resolved_seed
+
+
+def _safe_job_prefix(job_id: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in job_id)[:48]
+
+
+def build_register_speaker_prompt(
+    *,
+    ref_audio_name: str,
+    ref_text: str,
+    slug: str,
+    job_id: str,
+    device: str = "cuda",
+    precision: str = "bf16",
+    attention: str = "sdpa",
+) -> dict[str, Any]:
+    """Graph that turns an uploaded reference clip into a reusable speaker.
+
+    ``ref_audio_name`` is the ComfyUI-side uploaded file name. The graph
+    extracts the voice clone prompt, persists it via ``FB_Qwen3TTSSaveVoice``
+    (``.qvp`` + ``.json`` with ref_text + ``.wav`` under the ComfyUI
+    ``models/qwen-tts/voices`` directory), and also saves the reference
+    passthrough through ``SaveAudio`` so the job always has a mapped output
+    (the MCP adapter rejects jobs with no files).
+    """
+    if not ref_audio_name:
+        raise ValueError("ref_audio_name is required")
+    if not (ref_text or "").strip():
+        raise ValueError("ref_text is required to register a speaker")
+    if not (slug or "").strip():
+        raise ValueError("slug is required to register a speaker")
+    return {
+        NODE_REF_LOAD: {
+            "class_type": "LoadAudio",
+            "inputs": {"audio": ref_audio_name},
+        },
+        NODE_CLONE_PROMPT: {
+            "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+            "inputs": {
+                "ref_audio": [NODE_REF_LOAD, 0],
+                "ref_text": ref_text.strip(),
+                "model_choice": SPEAKER_MODEL_CHOICE,
+                "device": device,
+                "precision": precision,
+                "attention": attention,
+                "x_vector_only": False,
+                "unload_model_after_generate": False,
+            },
+        },
+        NODE_VOICE_SAVE: {
+            "class_type": "FB_Qwen3TTSSaveVoice",
+            "inputs": {
+                "voice_clone_prompt": [NODE_CLONE_PROMPT, 0],
+                "filename": slug,
+                "audio": [NODE_REF_LOAD, 0],
+                "ref_text": ref_text.strip(),
+            },
+        },
+        NODE_SAVE: {
+            "class_type": "SaveAudio",
+            "inputs": {
+                "filename_prefix": f"director-studio/{_safe_job_prefix(job_id)}/reference",
+                "audio": [NODE_REF_LOAD, 0],
+            },
+        },
+    }
+
+
+def build_speaker_speak_prompt(
+    *,
+    speaker_wav: str,
+    text: str,
+    seed: int | None,
+    job_id: str,
+    language: str = "Chinese",
+    device: str = "cuda",
+    precision: str = "bf16",
+    attention: str = "sdpa",
+    top_p: float = 0.8,
+    top_k: int = 20,
+    temperature: float = 1.0,
+    repetition_penalty: float = 1.05,
+    max_new_tokens: int = 2048,
+) -> tuple[dict[str, Any], int]:
+    """Graph that speaks ``text`` with a previously saved speaker.
+
+    ``FB_Qwen3TTSLoadSpeaker`` fast-loads the ``.qvp`` features and returns
+    the stored ``ref_text`` (output 2), so the transcript never has to be
+    re-entered. The pre-computed prompt is wired straight into
+    ``FB_Qwen3TTSVoiceClone`` (output 0).
+    """
+    if not (speaker_wav or "").strip():
+        raise ValueError("speaker_wav is required")
+    if not (text or "").strip():
+        raise ValueError("text is required")
+    resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+    prompt = {
+        NODE_SPEAKER_LOAD: {
+            "class_type": "FB_Qwen3TTSLoadSpeaker",
+            "inputs": {"filename": speaker_wav.strip()},
+        },
+        NODE_SPEAKER_CLONE: {
+            "class_type": "FB_Qwen3TTSVoiceClone",
+            "inputs": {
+                "target_text": text.strip(),
+                "model_choice": SPEAKER_MODEL_CHOICE,
+                "device": device,
+                "precision": precision,
+                "language": language,
+                "voice_clone_prompt": [NODE_SPEAKER_LOAD, 0],
+                "ref_text": [NODE_SPEAKER_LOAD, 2],
+                "seed": resolved_seed,
+                "max_new_tokens": max_new_tokens,
+                "top_p": top_p,
+                "top_k": top_k,
+                "temperature": temperature,
+                "repetition_penalty": repetition_penalty,
+                "x_vector_only": False,
+                "attention": attention,
+                "unload_model_after_generate": True,
+            },
+        },
+        NODE_SAVE: {
+            "class_type": "SaveAudio",
+            "inputs": {
+                "filename_prefix": f"director-studio/{_safe_job_prefix(job_id)}/tts",
+                "audio": [NODE_SPEAKER_CLONE, 0],
             },
         },
     }

@@ -19,6 +19,12 @@ the result as a Voice asset in the current project's library.
   wanted. This is the user-rejected voice for the 女声 series; do not substitute
   it for `longchang-girl` when the user asked for the little-girl recitation.
 - `custom` — supply your own full voice-design `instruct`.
+- `saved-speaker` — speak ANY text with a voice the user registered in this
+  project's Voice Studio (Voice Cloning). Pass the speaker's id (`spk_...`) or
+  exact name in `speaker`. The reference transcript (`ref_text`) and clone
+  features are saved with the speaker and load automatically — never pass
+  `respell` or `instruct` with this style; the accent rides on the registered
+  reference audio. List available speakers with their names before casting.
 
 ## Reading discipline
 

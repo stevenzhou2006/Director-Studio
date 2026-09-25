@@ -182,8 +182,33 @@ async def _handle_tts(
         "instruct": str(args.get("instruct") or "").strip(),
         "model_choice": str(args.get("model_choice") or "1.7B").strip(),
         "lead_silence_s": _optional_float(args.get("lead_silence_s"), default=0.0),
+        "tail_silence_s": _optional_float(args.get("tail_silence_s"), default=0.0),
+        "speed": _optional_float(args.get("speed"), default=1.0),
         "project_id": project_id,
     }
+    if style == "saved-speaker":
+        from ....pipelines.tts import speakers as speaker_registry
+
+        speaker_ref = str(args.get("speaker") or "").strip()
+        if not speaker_ref:
+            raise ValueError(
+                "generate_tts_audio style='saved-speaker' requires 'speaker' "
+                "(a registered speaker id or exact name from Voice Studio)"
+            )
+        speaker = speaker_registry.resolve_speaker(project_id, speaker_ref)
+        if speaker is None:
+            raise ValueError(
+                f"No saved speaker matches {speaker_ref!r} in this project. "
+                "Register one in Voice Studio first."
+            )
+        if not speaker_registry.speaker_is_ready(speaker["id"]):
+            raise ValueError(
+                f"Speaker {speaker.get('name')!r} is not ready yet "
+                f"(status={speaker.get('status')}); its voice features are missing."
+            )
+        params["speaker"] = speaker.get("name") or speaker_ref
+        params["speaker_id"] = speaker["id"]
+        params["speaker_wav"] = speaker_registry.speaker_wav_name(speaker["id"])
     seed = args.get("seed")
     try:
         seed_value = int(seed) if seed is not None else None

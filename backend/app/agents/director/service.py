@@ -102,6 +102,7 @@ from .reference_service import (
     _scene_image_for_ref_frame,
     build_ref_frame_brief,
     build_tail_frame_revision_brief,
+    match_scene_angle_plate,
 )
 from ...core.projects.continuity import (
     apply_continuity_to_shot,
@@ -159,6 +160,60 @@ class LayoutCastQC(BaseModel):
     missing: list[str] = Field(default_factory=list)
     passed: bool = False
     notes: str = ""
+
+
+class LayoutStyleQC(BaseModel):
+    """Structured result of a post-generation style/scene-match vision check."""
+
+    medium_matches: bool = False
+    geography_matches: bool = False
+    medium_mismatch: str = ""
+    geography_mismatch: str = ""
+    passed: bool = False
+    notes: str = ""
+
+
+def _style_scene_qc_prompt(style_lock: str, *, has_scene_image: bool) -> str:
+    if has_scene_image:
+        authority = (
+            "Image2 is the scene reference plate and the style and geography "
+            "authority."
+            + (
+                f" The PROJECT STYLE LOCK is: {style_lock}."
+                if (style_lock or "").strip()
+                else ""
+            )
+        )
+        geo_rule = (
+            "(b) geography_matches — does Image1's background show the SAME "
+            "location and landmarks as Image2 (same architecture, layout, key "
+            "objects), allowing for a different camera angle? A generic "
+            "re-imagined room where Image2 shows a distinctive courtyard/tree/"
+            "gate means geography_matches=false; describe what is missing or "
+            "replaced in geography_mismatch. "
+        )
+    else:
+        authority = f"The PROJECT STYLE LOCK is: {style_lock}."
+        geo_rule = (
+            "(b) geography_matches — judge only against what the frame itself "
+            "shows; set it true unless the frame contradicts its own described "
+            "setting. "
+        )
+    return (
+        "Image1 is a generated Layout reference frame. " + authority + " "
+        "Check two things and return only JSON: "
+        "(a) medium_matches — is Image1 rendered in the SAME art medium, "
+        "palette and lighting treatment as the authority (photoreal cinematic "
+        "vs ink-wash illustration vs watercolor vs 3D render etc.)? If the "
+        "medium differs (for example Image1 looks like a Chinese ink-wash/青绿 "
+        "painting while the authority is photoreal, or vice versa), set "
+        "medium_matches=false and describe the mismatch in medium_mismatch. "
+        + geo_rule
+        + "passed = medium_matches AND geography_matches. "
+        'Schema: {"medium_matches":bool,"geography_matches":bool,'
+        '"medium_mismatch":str,"geography_mismatch":str,"passed":bool,'
+        '"notes":str}'
+    )
 
 
 def _cast_qc_prompt(expected: list[str]) -> str:
@@ -1544,11 +1599,19 @@ class DirectorService:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         current = load_shot(project.id, shot.id) or shot
+        # A successful queue supersedes earlier Layout failures; keep the
+        # diagnostic list from going stale.
+        meta = {
+            k: v
+            for k, v in (current.meta or {}).items()
+            if k != "layout_generation_issues"
+        }
         updated = current.model_copy(
             update={
                 "layout_refs": [*current.layout_refs, layout_ref],
                 "status": ShotStatus.ref_frame_pending,
                 "blocked_reasons": [],
+                "meta": meta,
             }
         )
         updated = mirror_legacy_layout_fields(
@@ -1672,6 +1735,60 @@ class DirectorService:
         )
         return updated
 
+    async def derive_style_from_scene(
+        self, project_id: str, scene_asset_id: str | None = None
+    ) -> str:
+        """Derive a canonical style sentence from a scene asset's master plate.
+
+        One vision pass over the scene image produces the sentence that becomes
+        the project's style lock, so every shot carries identical style wording
+        instead of each shot's visual director re-authoring (and drifting) the
+        style description independently.
+        """
+        from ...core.library.store import list_assets
+
+        scenes = list_assets("scenes", project_id=project_id)
+        if scene_asset_id:
+            scene = next((a for a in scenes if a.id == scene_asset_id), None)
+            if scene is None:
+                scene = load_asset("scenes", scene_asset_id)
+        else:
+            scene = scenes[0] if scenes else None
+        if scene is None:
+            raise ValueError(
+                "no scene asset found in this project to derive a style from; "
+                "generate a Set Design plate first"
+            )
+        pair = _read_asset_image_bytes(scene, role="scene", file_key="master")
+        if pair is None:
+            for key in scene.files or {}:
+                pair = _read_asset_image_bytes(scene, role="scene", file_key=str(key))
+                if pair:
+                    break
+        if pair is None:
+            raise ValueError(f"scene asset {scene.id} has no readable image")
+
+        runtime_provider = getattr(self.orchestrator, "provider", None)
+        model = (
+            get_director_model(runtime_provider.provider_id)
+            if runtime_provider is not None
+            else get_director_model()
+        )
+        vision_client = (
+            runtime_provider.client
+            if runtime_provider is not None
+            else getattr(self.plan_provider, "client", None)
+        )
+        from .visual_direction import derive_scene_style_sentence
+
+        async with self.orchestrator.llm_session(release_on_exit=False):
+            await self.orchestrator.ensure_llm_ready()
+            sentence = await derive_scene_style_sentence(
+                pair[1], model=model, ollama=vision_client
+            )
+        await self.orchestrator.release_llm()
+        return sentence
+
     async def qc_layout(self, shot_id: str, layout_ref_id: str | None = None) -> dict[str, Any]:
         """Vision-check a generated Layout's cast count against the shot's actor refs.
 
@@ -1710,12 +1827,43 @@ class DirectorService:
             asset = load_asset("actors", ref.asset_id)
             if asset is not None and asset.name:
                 expected.append(asset.name)
-        if not expected:
-            return {
-                "layout_ref_id": target.id,
-                "skipped": True,
-                "reason": "shot has no named actor refs to check against",
-            }
+
+        # Resolve the style/scene authority for the second check.
+        from ...core.prompting import effective_style_lock
+
+        style_lock = effective_style_lock(shot.project_id)
+        scene_b64: str | None = None
+        for ref in shot.refs:
+            if ref.role != RefRole.scene:
+                continue
+            scene_asset = load_asset("scenes", ref.asset_id)
+            if scene_asset is None:
+                continue
+            scene_pair = _read_asset_image_bytes(
+                scene_asset, role="scene", file_key=ref.file_key or "master"
+            )
+            if scene_pair is None:
+                for key in scene_asset.files or {}:
+                    scene_pair = _read_asset_image_bytes(
+                        scene_asset, role="scene", file_key=str(key)
+                    )
+                    if scene_pair:
+                        break
+            if scene_pair is not None:
+                from .vision import image_bytes_to_b64_jpeg as _enc
+
+                scene_b64 = _enc(scene_pair[1])
+            break
+        if scene_b64 is None and not style_lock:
+            if not expected:
+                return {
+                    "layout_ref_id": target.id,
+                    "skipped": True,
+                    "reason": (
+                        "shot has no actor refs, no scene ref, and no style "
+                        "lock to check against"
+                    ),
+                }
 
         runtime_provider = getattr(self.orchestrator, "provider", None)
         model = (
@@ -1736,27 +1884,57 @@ class DirectorService:
 
         async with self.orchestrator.llm_session(release_on_exit=False):
             await self.orchestrator.ensure_llm_ready()
-            response = await vision_client.chat(
-                model,
-                with_director_skill(
-                    _cast_qc_prompt(expected),
-                    guides=("visual-qc", "character-continuity"),
-                ),
-                images=[b64],
-                require_vision=True,
-                keep_alive="10m",
-                options={"temperature": 0.0},
-                format=LayoutCastQC.model_json_schema(),
-            )
+            qc: LayoutCastQC | None = None
+            if expected:
+                response = await vision_client.chat(
+                    model,
+                    with_director_skill(
+                        _cast_qc_prompt(expected),
+                        guides=("visual-qc", "character-continuity"),
+                    ),
+                    images=[b64],
+                    require_vision=True,
+                    keep_alive="10m",
+                    options={"temperature": 0.0},
+                    format=LayoutCastQC.model_json_schema(),
+                )
+                qc = LayoutCastQC.model_validate(json.loads(_json_object(response)))
+            style_qc: LayoutStyleQC | None = None
+            if scene_b64 is not None or style_lock:
+                style_images = [b64] + ([scene_b64] if scene_b64 else [])
+                style_response = await vision_client.chat(
+                    model,
+                    with_director_skill(
+                        _style_scene_qc_prompt(
+                            style_lock, has_scene_image=scene_b64 is not None
+                        ),
+                        guides=("visual-qc", "background-continuity"),
+                    ),
+                    images=style_images,
+                    require_vision=True,
+                    keep_alive="10m",
+                    options={"temperature": 0.0},
+                    format=LayoutStyleQC.model_json_schema(),
+                )
+                style_qc = LayoutStyleQC.model_validate(
+                    json.loads(_json_object(style_response))
+                )
         await self.orchestrator.release_llm()
 
-        qc = LayoutCastQC.model_validate(json.loads(_json_object(response)))
-        result = {
+        result: dict[str, Any] = {
             "layout_ref_id": target.id,
             "layout_asset_id": target.asset_id,
             "expected_cast": expected,
-            **qc.model_dump(),
         }
+        if qc is not None:
+            result.update(qc.model_dump())
+        if style_qc is not None:
+            result["style_qc"] = style_qc.model_dump()
+            result["style_passed"] = style_qc.passed
+        if qc is not None:
+            result["cast_passed"] = qc.passed
+        if qc is not None and style_qc is not None:
+            result["passed"] = qc.passed and style_qc.passed
 
         # Persist onto the Layout asset meta.
         asset = load_asset("layouts", target.asset_id)
@@ -2191,8 +2369,17 @@ class DirectorService:
                 if packed:
                     filename, data, used_key = packed
             elif ref.role == RefRole.scene:
+                scene_preferred = ref.file_key
+                scene_forced = False
+                if not scene_preferred or scene_preferred == "master":
+                    matched_plate = match_scene_angle_plate(asset, shot)
+                    if matched_plate:
+                        scene_preferred = matched_plate
+                        scene_forced = True
                 packed_scene = _scene_image_for_ref_frame(
-                    asset, preferred_key=ref.file_key
+                    asset,
+                    preferred_key=scene_preferred,
+                    force_preferred=scene_forced,
                 )
                 if packed_scene:
                     filename, data, used_key = packed_scene

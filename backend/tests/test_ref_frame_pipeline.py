@@ -351,6 +351,101 @@ def test_build_prompt_orders_ref_keys():
     assert len(loaders) == 3
 
 
+def test_build_prompt_adds_scene_style_authority_when_scene_in_pack():
+    from app.core.prompting import SCENE_STYLE_AUTHORITY_MARKER
+    from app.pipelines import get_pipeline
+
+    pipe = get_pipeline("ref_frame")
+    job = JobRecord(
+        id="job_scene_guard",
+        pipeline_id="ref_frame",
+        asset_kind="layouts",
+        status=JobStatus.queued,
+        name="layout",
+        params={
+            "description": "cats in the courtyard",
+            "source_asset_ids": ["act_1", "scn_2"],
+            "ref_labels": ["Image1 actor dali", "Image2 scene courtyard"],
+        },
+        seed=3,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    graph, _seed = pipe.build_prompt(
+        job, uploaded_images={"ref_0": "a.png", "ref_1": "s.png"}
+    )
+    prompt = graph[NODE_DESCRIPTION]["inputs"]["prompt"]
+    assert "cats in the courtyard" in prompt
+    assert SCENE_STYLE_AUTHORITY_MARKER in prompt
+
+
+def test_build_prompt_no_scene_guard_without_scene_asset():
+    from app.core.prompting import SCENE_STYLE_AUTHORITY_MARKER
+    from app.pipelines import get_pipeline
+
+    pipe = get_pipeline("ref_frame")
+    job = JobRecord(
+        id="job_no_scene",
+        pipeline_id="ref_frame",
+        asset_kind="layouts",
+        status=JobStatus.queued,
+        name="layout",
+        params={
+            "description": "actor at desk",
+            "source_asset_ids": ["act_1"],
+            "ref_labels": ["Image1 actor Ana"],
+        },
+        seed=3,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    graph, _seed = pipe.build_prompt(job, uploaded_images={"ref_0": "a.png"})
+    prompt = graph[NODE_DESCRIPTION]["inputs"]["prompt"]
+    assert SCENE_STYLE_AUTHORITY_MARKER not in prompt
+
+
+def test_build_prompt_explicit_style_lock_wins_over_scene_guard(tmp_projects_dir, tmp_path, monkeypatch):
+    from app.config import settings
+    from app.core.projects.models import Project, ProjectMode
+    from app.core.projects.store import save_project
+    from app.core.prompting import SCENE_STYLE_AUTHORITY_MARKER, STYLE_LOCK_MARKER
+    from app.pipelines import get_pipeline
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    save_project(
+        Project(
+            id="prj_lock_wins",
+            name="p",
+            script_text="s",
+            mode=ProjectMode.director,
+            style_lock="watercolour",
+            created_at="x",
+            updated_at="x",
+        )
+    )
+    pipe = get_pipeline("ref_frame")
+    job = JobRecord(
+        id="job_lock_wins",
+        pipeline_id="ref_frame",
+        asset_kind="layouts",
+        status=JobStatus.queued,
+        name="layout",
+        project_id="prj_lock_wins",
+        params={
+            "description": "cats in the courtyard",
+            "source_asset_ids": ["scn_2"],
+            "ref_labels": ["Image1 scene courtyard"],
+        },
+        seed=3,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    graph, _seed = pipe.build_prompt(job, uploaded_images={"ref_0": "s.png"})
+    prompt = graph[NODE_DESCRIPTION]["inputs"]["prompt"]
+    assert STYLE_LOCK_MARKER in prompt
+    assert SCENE_STYLE_AUTHORITY_MARKER not in prompt
+
+
 def test_save_to_library_meta_pending_review(tmp_path, monkeypatch):
     from app.config import settings
     from app.pipelines import get_pipeline

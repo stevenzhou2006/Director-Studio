@@ -61,7 +61,7 @@ def svc(monkeypatch: pytest.MonkeyPatch) -> DirectorService:
     def fake_actor(asset, *, preferred_key=None):
         return ("actor.png", _png_bytes(), preferred_key or "master")
 
-    def fake_scene(asset, *, preferred_key=None):
+    def fake_scene(asset, *, preferred_key=None, force_preferred=False):
         return ("scene.png", _png_bytes(), preferred_key or "master")
 
     monkeypatch.setattr(
@@ -210,7 +210,9 @@ def test_collect_packs_two_actors_and_keeps_the_prop_attached(monkeypatch) -> No
     )
     monkeypatch.setattr(
         "app.agents.director.service._scene_image_for_ref_frame",
-        lambda asset, preferred_key=None: ("scene.png", png(800, 450, (60, 60, 60)), "master"),
+        lambda asset, preferred_key=None, force_preferred=False: (
+            "scene.png", png(800, 450, (60, 60, 60)), "master",
+        ),
     )
     monkeypatch.setattr(
         "app.agents.director.service._read_asset_image_bytes",
@@ -299,7 +301,9 @@ def test_collect_keeps_two_human_actors_separate(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.agents.director.service._scene_image_for_ref_frame",
-        lambda asset, preferred_key=None: ("scene.png", png(800, 450, (60, 60, 60)), "master"),
+        lambda asset, preferred_key=None, force_preferred=False: (
+            "scene.png", png(800, 450, (60, 60, 60)), "master",
+        ),
     )
     monkeypatch.setattr(
         "app.agents.director.service._read_asset_image_bytes",

@@ -220,49 +220,16 @@ def _contains_direction(text: str, direction: str) -> bool:
 
 
 STYLE_LOCK_MARKER = "PROJECT STYLE LOCK"
-
-# Keyword → canonical English style phrase. Scanned against the project script's
-# production brief so a project that names its art style in prose still gets a
-# machine-enforced lock even when no one set ``Project.style_lock`` explicitly.
-_STYLE_PHRASES: list[tuple[tuple[str, ...], str]] = [
-    (("水墨", "ink-wash", "ink wash", "shuimo"), "Chinese ink-wash (水墨) brush painting"),
-    (("青绿", "blue-green", "blue green", "qinglü", "qinglv"), "blue-green (青绿) mineral colour wash"),
-    (("工笔", "gongbi"), "meticulous gongbi (工笔) line work"),
-    (("写意", "xieyi", "freehand"), "freehand xieyi (写意) brushwork"),
-    (("水彩", "watercolor", "watercolour"), "translucent watercolour"),
-    (("油画", "oil painting", "oil paint"), "oil-painting texture"),
-    (("浮世绘", "ukiyo"), "ukiyo-e woodblock print"),
-    (("赛博朋克", "cyberpunk"), "neon cyberpunk"),
-    (("蒸汽朋克", "steampunk"), "brass steampunk"),
-    (("像素", "pixel art", "pixel-art"), "retro pixel art"),
-    (("3d", "3D", "三维", "cgi"), "polished 3D render"),
-]
-
-
-def derive_style_lock(script_text: str) -> str:
-    """Derive a canonical style sentence from a script's production brief.
-
-    Returns empty when no recognised style keyword is present, so callers can tell
-    "no derivable style" apart from an explicit lock.
-    """
-    text = (script_text or "")
-    if not text.strip():
-        return ""
-    lowered = text.lower()
-    matched: list[str] = []
-    for keywords, phrase in _STYLE_PHRASES:
-        if any(kw.lower() in lowered for kw in keywords):
-            if phrase not in matched:
-                matched.append(phrase)
-    if not matched:
-        return ""
-    if len(matched) == 1:
-        return matched[0]
-    return ", blended with ".join(matched)
+SCENE_STYLE_AUTHORITY_MARKER = "SCENE STYLE AUTHORITY"
 
 
 def effective_style_lock(project_id: str | None = None) -> str:
-    """Resolve the active style lock: explicit project field, else derived."""
+    """Resolve the active style lock: the explicit project field only.
+
+    A style is never derived from script prose or any other implicit source.
+    Only a lock the user explicitly requested (``Project.style_lock``) is
+    enforced; otherwise the imported scene assets are the style authority.
+    """
     if not project_id:
         return ""
     try:
@@ -276,7 +243,25 @@ def effective_style_lock(project_id: str | None = None) -> str:
     explicit = (getattr(project, "style_lock", "") or "").strip()
     if explicit:
         return flatten_direction(explicit)
-    return derive_style_lock(project.script_text or "")
+    return ""
+
+
+def scene_style_authority_block() -> str:
+    """Formatted guard telling the model to follow the scene asset's style."""
+    return (
+        f"{SCENE_STYLE_AUTHORITY_MARKER}: the attached scene image is the style "
+        "authority for this frame. Match its rendering medium, palette, lighting "
+        "and art style exactly. Do not introduce any other art style."
+    )
+
+
+def append_scene_style_authority(base_prompt: str) -> str:
+    """Append the scene style authority guard, de-duplicated."""
+    base = (base_prompt or "").strip()
+    if SCENE_STYLE_AUTHORITY_MARKER.lower() in base.lower():
+        return base
+    block = scene_style_authority_block()
+    return f"{base}\n\n{block}" if base else block
 
 
 def style_lock_block(style_lock: str) -> str:
@@ -288,6 +273,65 @@ def style_lock_block(style_lock: str) -> str:
         f"{STYLE_LOCK_MARKER} (identical for every shot in this project; render "
         f"in exactly this style and no other): {text}"
     )
+
+
+# Named art-media groups. When a style lock is active, any of these media named
+# in a prompt while the lock does not include that medium is a contradiction the
+# image model will otherwise obey. Used for detection only — never to derive a
+# style from prose.
+STYLE_MEDIA_TERMS: dict[str, tuple[str, ...]] = {
+    "ink-wash painting": ("水墨", "ink-wash", "ink wash", "shuimo"),
+    "blue-green (青绿) mineral wash": ("青绿", "blue-green", "blue green", "qinglü", "qinglv"),
+    "gongbi (工笔) line painting": ("工笔", "gongbi"),
+    "xieyi (写意) brushwork": ("写意", "xieyi"),
+    "watercolor": ("watercolour", "watercolor"),
+    "oil painting": ("油画", "oil painting", "oil paint"),
+    "ukiyo-e woodblock": ("浮世绘", "ukiyo"),
+}
+
+STYLE_CONTRADICTION_MARKER = "STYLE CONTRADICTION GUARD"
+
+
+def style_contradiction_terms(prompt: str, style_lock: str) -> list[str]:
+    """Media named in ``prompt`` that the ``style_lock`` does not contain.
+
+    Returns the human-readable media labels (e.g. ``["ink-wash painting"]``).
+    Empty when no lock is set or no contradicting medium appears.
+    """
+    if not (style_lock or "").strip() or not (prompt or "").strip():
+        return []
+    lock_lower = style_lock.lower()
+    prompt_lower = prompt.lower()
+    found: list[str] = []
+    for label, terms in STYLE_MEDIA_TERMS.items():
+        if any(term.lower() in lock_lower for term in terms):
+            continue
+        if any(term.lower() in prompt_lower for term in terms):
+            found.append(label)
+    return found
+
+
+def style_contradiction_override_block(terms: list[str]) -> str:
+    names = ", ".join(f'"{term}"' for term in terms)
+    return (
+        f"{STYLE_CONTRADICTION_MARKER}: the media words {names} appear somewhere "
+        "above but contradict the PROJECT STYLE LOCK. They are stale leftovers "
+        "from an earlier draft and must be ignored. Render in exactly the locked "
+        "style and no other medium."
+    )
+
+
+def append_style_contradiction_override(base_prompt: str, style_lock: str) -> str:
+    """Append an explicit ignore-the-contradiction instruction when needed."""
+    base = (base_prompt or "").strip()
+    if not base:
+        return base
+    if STYLE_CONTRADICTION_MARKER.lower() in base.lower():
+        return base
+    terms = style_contradiction_terms(base, style_lock)
+    if not terms:
+        return base
+    return f"{base}\n\n{style_contradiction_override_block(terms)}"
 
 
 def append_style_lock(base_prompt: str, style_lock: str) -> str:

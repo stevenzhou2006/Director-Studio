@@ -1,17 +1,44 @@
 # Reference-frame generation
 
-## Lock the project style first
+## Follow the imported scene assets' style
 
-Before generating any Layout, make sure the project has one canonical art style.
-Call `set_style_lock` with the style from the script's production brief (for
-example "Chinese ink-wash blended with blue-green mineral colour wash on rice
-paper"). The lock is injected into every reference-frame generation automatically,
-so all shots render in the same medium, palette, and background treatment. If the
-user says the shots look inconsistent (one ink-wash, one photoreal), the style was
-never locked: set it, then regenerate the drifted Layouts with `revise_ref_frame`.
-A photographic scene plate controls content and geography only — the style lock
-controls the rendering medium, so a photo plate under an ink-wash lock must still
-produce an ink-wash frame.
+The imported scene assets are the style authority. Every Layout must match the
+medium, palette, lighting, and rendering style of the scene image attached to it;
+the pipeline adds this guard automatically whenever a scene asset is in the
+reference pack. Never invent an art style and never derive one from the script's
+production brief — a style that is not present in the scene assets must not appear
+in the Layout. Describe the scene image in the prompt as controlling the style as
+well as the geography, so the frame inherits how the scene is rendered, not just
+what it contains.
+
+Only call `set_style_lock` when the user explicitly asks for a specific art
+style, or asks to keep/preserve the scene's style (保留原风格 / 画风要一致). The
+lock is then injected into every reference-frame generation and overrides the
+scene assets. Do not set it on your own initiative: a lock that differs from the
+scene assets forces every frame away from them. Pass an empty style to clear a
+lock and return to following the scene assets.
+
+When the user wants the project to keep the scene's own style, prefer
+`set_style_lock` with `from_scene` (or `from_scene:<scene_asset_id>`): the style
+sentence is derived once from the scene image and every shot then carries the
+identical wording, instead of each shot's visual director re-describing the
+style and drifting. Never derive the lock from the script's production-brief
+prose — if the brief names a style that is not visible in the scene image, the
+brief is wrong for generation purposes.
+
+The pipeline also enforces the lock deterministically: if a prompt names an art
+medium (ink-wash/水墨/青绿/watercolor/gongbi/油画 etc.) that the lock does not
+contain, a STYLE CONTRADICTION GUARD is appended telling the model to ignore
+those words. When repairing a rejected Layout, the rejected frame's rendering
+medium is never "what already works" unless it matches the lock or the scene
+image — re-assert the correct medium explicitly.
+
+For Layouts whose camera angle differs from the scene master's viewpoint, the
+pack builder automatically selects the scene asset's angle plate that matches
+the shot's camera direction (back/reverse, left/right side, front-left/right,
+bird's-eye, low angle) so the background geography stays grounded. `qc_layout`
+checks both cast count and style/scene match (medium + background geography)
+before a Layout should be accepted.
 
 ## Normal Qwen request
 

@@ -15,10 +15,12 @@ from ...core.projects.layouts import LayoutBrief, RefRole
 from ...core.projects.models import Shot
 from ...core.prompting import (
     append_global_prompt,
+    append_style_contradiction_override,
     append_style_lock,
     effective_global_prompt,
     effective_style_lock,
     global_prompt_block,
+    scene_style_authority_block,
     style_lock_block,
 )
 from .skill_loader import with_director_skill
@@ -78,6 +80,45 @@ class VisualDirectionResult(BaseModel):
 
 class GenerationPromptRepair(BaseModel):
     generation_prompt: str = Field(min_length=1)
+
+
+class SceneStyleSentence(BaseModel):
+    style_sentence: str = Field(min_length=1)
+
+
+SCENE_STYLE_DERIVATION_PROMPT = (
+    "Describe the art style of this scene image in ONE English sentence so it "
+    "can be reused verbatim as a project-wide style lock. Name the rendering "
+    "medium explicitly (for example: photorealistic cinematic render, 3D "
+    "architectural visualization, Chinese ink-wash painting, watercolor "
+    "illustration), then the palette, the lighting treatment, and the finish. "
+    "Describe only style — never the content, objects, or any text in the "
+    "image. Return only JSON with schema {\"style_sentence\":\"...\"}."
+)
+
+
+async def derive_scene_style_sentence(
+    image_bytes: bytes,
+    *,
+    model: str,
+    ollama: _VisionClient,
+) -> str:
+    """One vision pass over a scene plate to get a canonical style sentence."""
+    b64 = _vision_jpeg(image_bytes)
+    response = await ollama.chat(
+        model,
+        SCENE_STYLE_DERIVATION_PROMPT,
+        images=[b64],
+        require_vision=True,
+        keep_alive="10m",
+        options={"temperature": 0.2},
+        format=SceneStyleSentence.model_json_schema(),
+    )
+    payload = json.loads(_json_object(response))
+    sentence = SceneStyleSentence.model_validate(payload).style_sentence.strip()
+    if not sentence:
+        raise ValueError("scene style derivation returned an empty sentence")
+    return sentence
 
 
 class _VisionClient(Protocol):
@@ -246,7 +287,11 @@ def _analysis_prompt(
             "The final attachment is PreviousResult, a rejected output for visual diagnosis "
             "only. It is not a generation reference and must never be named ImageN in "
             "generation_prompt. Preserve what already works and rewrite the prompt to fix "
-            "the human feedback.\n"
+            "the human feedback. The rendering medium of PreviousResult is NOT part of "
+            "'what already works' unless it matches the STYLE LOCK or SCENE STYLE "
+            "AUTHORITY above: drop any art-style wording carried over from the rejected "
+            "frame that contradicts the locked or scene medium, and re-assert the correct "
+            "medium explicitly in the rewritten generation_prompt.\n"
             f"HUMAN FEEDBACK: {feedback.strip()}"
         )
     elif feedback.strip() and layout_brief is not None:
@@ -285,12 +330,24 @@ def _analysis_prompt(
         style_block = (
             f"{style_lock_block(style_lock)}\n"
             "Every shot of this project must be rendered in exactly this art style so "
-            "the frames read as one film. Carry the style into scene_lock and write it "
-            "into generation_prompt as a positive instruction. Do not substitute a "
-            "photoreal, anime, or any other style for the locked one, even if a "
-            "reference attachment (for example a photographic scene plate) is in a "
-            "different medium: the reference controls content, the style lock controls "
-            "the rendering medium.\n\n"
+            "the frames read as one film. The user explicitly requested this style; "
+            "carry it into scene_lock and write it into generation_prompt as a "
+            "positive instruction. Do not substitute a photoreal, anime, or any "
+            "other style for the locked one.\n\n"
+        )
+    elif any("scene" in str(caption).lower().split() for caption in captions):
+        style_block = (
+            f"{scene_style_authority_block()}\n"
+            "Carry the scene attachment's medium, palette, lighting and rendering "
+            "style into scene_lock and generation_prompt so the frame matches the "
+            "imported scene assets. Never invent or introduce a different art "
+            "style for this shot. Transcribe the medium from what the scene image "
+            "ACTUALLY shows: if it is a photorealistic or CG/cinematic render, "
+            "describe it as such and never call it ink-wash, 水墨, 青绿, "
+            "watercolor, gongbi or any other painting medium. Style words that "
+            "appear in the shot text, the script, or the feedback but are not "
+            "visible in the attached scene image must not reach scene_lock or "
+            "generation_prompt.\n\n"
         )
     return (
         f"{global_block}"
@@ -460,6 +517,9 @@ async def analyze_ref_frame(
     # Hard backstop: even if the brief dropped the style, every shot carries the
     # same lock so the project's frames cannot drift apart.
     compiled = append_style_lock(compiled, style_lock)
+    # If the brief named a medium the lock contradicts, tell the model explicitly
+    # which words to ignore instead of leaving two conflicting style commands.
+    compiled = append_style_contradiction_override(compiled, style_lock)
     selected = [
         {"image": f"Image{index}", "file_key": key, "caption": captions[index - 1]}
         for index, (key, _value) in enumerate(ordered, start=1)

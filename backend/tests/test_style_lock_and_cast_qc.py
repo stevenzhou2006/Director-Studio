@@ -5,10 +5,12 @@ from app.agents.director.tool_schema import director_tool_schemas
 from app.core.projects.models import Project, ProjectMode, Shot, ShotStatus
 from app.core.projects.store import save_project
 from app.core.prompting import (
+    SCENE_STYLE_AUTHORITY_MARKER,
     STYLE_LOCK_MARKER,
+    append_scene_style_authority,
     append_style_lock,
-    derive_style_lock,
     effective_style_lock,
+    scene_style_authority_block,
     style_lock_block,
 )
 
@@ -27,16 +29,6 @@ def _shot(**overrides) -> Shot:
     return Shot(**base)
 
 
-def test_derive_style_lock_detects_ink_and_bluegreen():
-    style = derive_style_lock("背景：水墨与青绿设色融合，雅致放松")
-    assert "ink-wash" in style
-    assert "blue-green" in style
-
-
-def test_derive_style_lock_empty_without_keywords():
-    assert derive_style_lock("a plain modern office scene") == ""
-
-
 def test_style_lock_block_and_append():
     assert style_lock_block("") == ""
     block = style_lock_block("ink-wash")
@@ -49,17 +41,28 @@ def test_style_lock_block_and_append():
     assert append_style_lock("base", "") == "base"
 
 
-def test_effective_style_lock_explicit_then_derived(tmp_projects_dir):
+def test_scene_style_authority_block_and_append():
+    block = scene_style_authority_block()
+    assert SCENE_STYLE_AUTHORITY_MARKER in block
+    merged = append_scene_style_authority("base prompt")
+    assert merged.startswith("base prompt") and SCENE_STYLE_AUTHORITY_MARKER in merged
+    # de-duplicated: appending twice keeps a single marker
+    twice = append_scene_style_authority(merged)
+    assert twice.count(SCENE_STYLE_AUTHORITY_MARKER) == 1
+
+
+def test_effective_style_lock_is_explicit_only(tmp_projects_dir):
     project = Project(
         id="prj_style_1",
         name="p",
-        script_text="水墨风格",
+        script_text="水墨风格 青绿设色",
         mode=ProjectMode.director,
         created_at="x",
         updated_at="x",
     )
     save_project(project)
-    assert effective_style_lock("prj_style_1") == derive_style_lock("水墨风格")
+    # No explicit lock: nothing is derived from the script prose.
+    assert effective_style_lock("prj_style_1") == ""
     save_project(project.model_copy(update={"style_lock": "oil painting"}))
     assert effective_style_lock("prj_style_1") == "oil painting"
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from ...core.library.store import list_assets
 from ...core.projects.layouts import LayoutBrief, LayoutReference, LayoutSourceRef
@@ -268,10 +269,99 @@ def combine_actor_stills(
         return None
 
 
+_ANGLE_PLATE_RE = re.compile(r"_h(-?\d+)_v(m?\d+)")
+
+
+def _parse_angle(raw: str) -> int:
+    # ``vm30`` encodes -30 (vertical minus 30); plain digits are positive.
+    if raw.startswith("m"):
+        return -int(raw[1:])
+    return int(raw)
+
+
+def _azimuth_delta(a: int, b: int) -> int:
+    return abs((a - b + 180) % 360 - 180)
+
+
+def match_scene_angle_plate(asset: LibraryAsset, shot: Shot) -> str | None:
+    """Pick the scene angle plate that matches the shot's camera intent.
+
+    Scene assets carry multi-angle plates whose file keys encode the camera
+    azimuth/elevation (``..._h<deg>_v<deg>``). When the shot explicitly names a
+    camera direction, returning the matching plate keeps the Layout's background
+    geography grounded instead of letting the model re-imagine the set from a
+    mismatched master viewpoint. Returns ``None`` when the shot carries no
+    explicit angle signal or no plate is close enough, so callers keep the
+    existing neutral-plate priority.
+    """
+    files = dict(asset.files or {})
+    plates: list[tuple[str, int, int]] = []
+    for key in files:
+        match = _ANGLE_PLATE_RE.search(str(key))
+        if match and files.get(key):
+            plates.append(
+                (
+                    str(key),
+                    _parse_angle(match.group(1)),
+                    _parse_angle(match.group(2)),
+                )
+            )
+    if not plates:
+        return None
+
+    text = " ".join(
+        part
+        for part in (shot.title, shot.camera_angle, shot.camera_motion, shot.composition)
+        if isinstance(part, str)
+    ).lower()
+    if not text.strip():
+        return None
+
+    desired_az: int | None = None
+    if any(w in text for w in ("reverse", "back view", "from behind", "背面", "反打")):
+        desired_az = 180
+    elif any(w in text for w in ("front-left", "front left", "左前")):
+        desired_az = 315
+    elif any(w in text for w in ("front-right", "front right", "右前")):
+        desired_az = 45
+    elif any(w in text for w in ("left side", "from the left", "左侧")):
+        desired_az = 270
+    elif any(w in text for w in ("right side", "from the right", "右侧")):
+        desired_az = 90
+    elif any(w in text for w in ("front", "正面")):
+        desired_az = 0
+
+    desired_el: int | None = None
+    if any(w in text for w in ("bird", "overhead", "aerial", "俯视", "俯瞰")):
+        desired_el = 45
+    elif any(w in text for w in ("low angle", "worm", "仰拍", "仰视")):
+        desired_el = -30
+
+    if desired_az is None and desired_el is None:
+        return None
+
+    def score(plate: tuple[str, int, int]) -> int:
+        _key, az, el = plate
+        total = 0
+        if desired_az is not None:
+            total += _azimuth_delta(az, desired_az)
+        if desired_el is not None:
+            total += 2 * abs(el - desired_el)
+        return total
+
+    best = min(plates, key=score)
+    if desired_az is not None and _azimuth_delta(best[1], desired_az) > 45:
+        return None
+    if desired_el is not None and abs(best[2] - desired_el) > 30:
+        return None
+    return best[0]
+
+
 def _scene_image_for_ref_frame(
     asset: LibraryAsset,
     *,
     preferred_key: str | None = None,
+    force_preferred: bool = False,
 ) -> tuple[str, bytes, str] | None:
     """Use the Agent-selected scene angle, with neutral plates as fallback only."""
     from ...core.library.images import resolve_asset_image
@@ -301,8 +391,9 @@ def _scene_image_for_ref_frame(
     # the layout model invents a cab, windows, and a steering wheel to fill the
     # gap. Honor an explicit preferred_key only when it is a usable layout angle;
     # otherwise let the clean full plate win (the bad key still falls through to
-    # the last-resort bucket below).
-    if preferred_key and not _is_bad_layout_angle(preferred_key):
+    # the last-resort bucket below). ``force_preferred`` overrides the bad-angle
+    # filter when the shot itself explicitly asked for that camera angle.
+    if preferred_key and (force_preferred or not _is_bad_layout_angle(preferred_key)):
         ordered_keys.append(preferred_key)
     for key in (
         "input_scene",  # clean full plate — best for layout quality

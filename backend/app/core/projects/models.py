@@ -204,9 +204,9 @@ class Project(BaseModel):
     # Project-wide negative direction for image pipelines that support one.
     # Empty falls back to the app-wide persisted negative.
     global_negative: str = ""
-    # One canonical art style every shot's reference frame must render in. Empty
-    # falls back to a style derived from the script's production brief. Without a
-    # lock each shot's visual brief picks its own style and the project drifts.
+    # One canonical art style every shot's reference frame must render in, set
+    # only when the user explicitly requests one. Never derived from script prose.
+    # Empty means the imported scene assets are the style authority.
     style_lock: str = ""
     created_at: str
     updated_at: str

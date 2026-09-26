@@ -710,20 +710,24 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
         (
             "Lock one canonical art style for the whole project so every shot's "
             "reference frame renders in exactly the same medium and palette. "
-            "Derive the style from the script's production brief (for example "
-            "'Chinese ink-wash blended with blue-green mineral colour wash on "
-            "rice paper') and call this BEFORE generating any Layout. The lock "
-            "is injected into every reference-frame generation automatically; "
-            "without it each shot picks its own style and the project drifts. "
-            "Pass an empty style to clear the lock and fall back to the "
-            "script-derived style."
+            "Call this when the user explicitly requests a specific art style, "
+            "or when the user asks to keep/preserve the style of the imported "
+            "scene (保留原风格/保持画风一致) — in that case pass \"from_scene\" "
+            "(or \"from_scene:<scene_asset_id>\") and the style sentence is "
+            "derived from the scene image itself, guaranteeing every shot shares "
+            "identical style wording instead of re-describing it per shot. "
+            "NEVER invent a style or derive one from the script's production "
+            "brief prose. Pass an empty style to clear the lock and return to "
+            "following the imported scene assets."
         ),
         {
             "style": {
                 "type": "string",
                 "description": (
-                    "One canonical art-style sentence for the whole project, or "
-                    "empty to clear the explicit lock."
+                    "One canonical art-style sentence the user explicitly "
+                    "requested for the whole project; \"from_scene\" or "
+                    "\"from_scene:<scene_asset_id>\" to derive the sentence "
+                    "from the scene asset's own rendering; empty to clear."
                 ),
             },
         },
@@ -732,13 +736,16 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
     function_tool(
         "qc_layout",
         (
-            "Vision-check a generated Layout's cast count against the shot's "
-            "bound actor references. Run this on every Layout before accepting "
-            "it: it catches duplicated or extra characters (for example one cat "
-            "cloned into two) and missing cast that a positive prompt cannot "
-            "prevent. Returns the expected cast, the detected count, and whether "
-            "it passed. A failed QC means the Layout must be revised, not "
-            "accepted."
+            "Vision-check a generated Layout against its shot's references. "
+            "Run this on every Layout before accepting it. It checks: (1) cast "
+            "count — duplicated or extra characters (for example one cat cloned "
+            "into two) and missing cast that a positive prompt cannot prevent; "
+            "(2) style and scene match — whether the Layout's rendering medium "
+            "matches the project style lock / scene asset and whether its "
+            "background geography matches the scene reference instead of a "
+            "re-imagined set. Returns the expected cast, the detected count, "
+            "the style/geography verdicts, and whether it passed. A failed QC "
+            "means the Layout must be revised, not accepted."
         ),
         {
             **SHOT_SELECTOR,

@@ -4,6 +4,8 @@ from typing import Any
 
 from ...core.prompting import (
     append_global_prompt,
+    append_scene_style_authority,
+    append_style_contradiction_override,
     append_style_lock,
     effective_global_negative,
     effective_global_prompt,
@@ -12,6 +14,21 @@ from ...core.prompting import (
 from ...core.schemas import ComfyImageRef, JobRecord, LibraryAsset
 from ..base import Pipeline
 from . import workflow
+
+
+def _pack_has_scene(params: dict[str, Any]) -> bool:
+    """True when the reference pack contains a scene library asset."""
+    source_ids = params.get("source_asset_ids") or []
+    if isinstance(source_ids, list) and any(
+        str(x).startswith("scn_") for x in source_ids
+    ):
+        return True
+    ref_labels = params.get("ref_labels") or []
+    if isinstance(ref_labels, list):
+        for label in ref_labels:
+            if "scene" in str(label).lower().split():
+                return True
+    return False
 
 
 class RefFramePipeline(Pipeline):
@@ -105,10 +122,17 @@ class RefFramePipeline(Pipeline):
         description = append_global_prompt(
             description, effective_global_prompt(job.project_id)
         )
-        # Same lock on every Layout so the project's frames cannot drift in style.
-        description = append_style_lock(
-            description, effective_style_lock(job.project_id)
-        )
+        # Style policy: an explicit user-requested lock wins; otherwise the
+        # imported scene asset is the style authority, so a Layout can never
+        # drift into an art style nobody asked for.
+        style_lock = effective_style_lock(job.project_id)
+        if style_lock:
+            description = append_style_lock(description, style_lock)
+            # Final backstop: a stale medium word in the prompt body would
+            # otherwise fight the lock.
+            description = append_style_contradiction_override(description, style_lock)
+        elif _pack_has_scene(p):
+            description = append_scene_style_authority(description)
 
         image_keys = p.get("image_keys")
         if isinstance(image_keys, list) and image_keys:

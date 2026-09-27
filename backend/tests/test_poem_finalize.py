@@ -14,7 +14,12 @@ from app.config import settings
 from app.core.jobs import poem_finalize, store
 from app.core.jobs.shot_sync import on_pipeline_job_terminal
 from app.core.projects.models import Shot, ShotStatus, ShotVoiceRef
-from app.core.projects.store import create_project, load_shot, save_shot
+from app.core.projects.store import (
+    create_project,
+    load_shot,
+    save_project,
+    save_shot,
+)
 from app.core.schemas import JobRecord, JobStatus, OutputSlot
 from app.pipelines.poem_overlay import timing
 
@@ -323,6 +328,116 @@ async def test_finalize_respects_explicit_start_s(isolated_data, monkeypatch):
 
     await poem_finalize.run_poem_finalize(job, shot)
     assert started[0].params["lines"][0]["start_s"] == 1.25
+
+
+# ---------------------------------------------------------------------------
+# Title-card first-shot gating
+# ---------------------------------------------------------------------------
+
+def _poem_shot_with_id(project_id: str, shot_id: str, line: str) -> Shot:
+    shot = Shot(
+        id=shot_id,
+        project_id=project_id,
+        scene_id="sc01",
+        title=f"Line {shot_id}",
+        script_beat=f"recites {line}",
+        duration_s=3.6,
+        status=ShotStatus.queued,
+        meta={
+            "poem": {
+                "title": "相思",
+                "author": "王维",
+                "dynasty": "唐",
+                "seal": "狸",
+                "lines": [{"text": line}],
+            }
+        },
+    )
+    save_shot(shot)
+    return shot
+
+
+def _capture_finalize_start(monkeypatch):
+    started: list[JobRecord] = []
+
+    async def fake_start(j, *, images=None):
+        started.append(j)
+        return j
+
+    monkeypatch.setattr(
+        "app.core.jobs.runner.start_pipeline_job", AsyncMock(side_effect=fake_start)
+    )
+    monkeypatch.setattr(timing, "resolve_recitation_audio", _raise_no_audio)
+    return started
+
+
+def _raise_no_audio(_shot):
+    raise timing.PoemTimingError("no recitation")
+
+
+@pytest.mark.asyncio
+async def test_finalize_title_card_only_on_first_poem_shot(isolated_data, monkeypatch):
+    """The title card must be burned into the first shot only, not every shot.
+
+    Regression: 唐诗-相思 had 《相思》唐·王维 repeated on all four shots
+    because finalize passed the title to every per-shot overlay.
+    """
+    project = create_project("Two shot poem", "script")
+    shot1 = _poem_shot_with_id(project.id, "sht_line1", "红豆生南国")
+    shot2 = _poem_shot_with_id(project.id, "sht_line2", "春来发几枝")
+    save_project(
+        project.model_copy(update={"shot_ids": [shot1.id, shot2.id]})
+    )
+
+    started = _capture_finalize_start(monkeypatch)
+
+    await poem_finalize.run_poem_finalize(
+        _h3_job(isolated_data, project.id, shot1.id, job_id="job_h3_l1"), shot1
+    )
+    await poem_finalize.run_poem_finalize(
+        _h3_job(isolated_data, project.id, shot2.id, job_id="job_h3_l2"), shot2
+    )
+
+    assert len(started) == 2
+    assert started[0].params["show_title"] is True
+    assert started[1].params["show_title"] is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_title_follows_first_poem_bearing_shot(
+    isolated_data, monkeypatch
+):
+    """A leading non-poem shot must not steal the title from the first poem shot."""
+    project = create_project("Cold open poem", "script")
+    cold_open = Shot(
+        id="sht_cold_open",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Cold open",
+        script_beat="no poem here",
+        duration_s=2.0,
+        status=ShotStatus.queued,
+        meta={},
+    )
+    save_shot(cold_open)
+    poem_shot = _poem_shot_with_id(project.id, "sht_poem1", "红豆生南国")
+    save_project(
+        project.model_copy(update={"shot_ids": [cold_open.id, poem_shot.id]})
+    )
+
+    started = _capture_finalize_start(monkeypatch)
+
+    await poem_finalize.run_poem_finalize(
+        _h3_job(isolated_data, project.id, poem_shot.id, job_id="job_h3_p1"),
+        poem_shot,
+    )
+
+    assert len(started) == 1
+    assert started[0].params["show_title"] is True
+
+
+def test_is_first_poem_shot_falls_back_when_project_missing(isolated_data):
+    assert poem_finalize.is_first_poem_shot("prj_ghost", "sht_ghost") is True
 
 
 # ---------------------------------------------------------------------------

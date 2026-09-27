@@ -75,6 +75,7 @@ class PoemOverlayPipeline(ExternalPipeline):
         output_name = str(params.get("output_name") or "poem_overlay").strip() or "poem_overlay"
         if not output_name.lower().endswith(".mp4"):
             output_name = f"{output_name}.mp4"
+        show_title = bool(params.get("show_title", True))
 
         audio_input = inputs.get("audio")
         if audio_input is not None:
@@ -113,6 +114,7 @@ class PoemOverlayPipeline(ExternalPipeline):
                 ),
                 work_dir=tmp_root / "frames",
                 replacement_audio=replacement_audio_path,
+                show_title=show_title,
             )
             return output_path.read_bytes(), meta
 

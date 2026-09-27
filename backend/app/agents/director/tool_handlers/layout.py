@@ -13,6 +13,7 @@ from ....core.projects.layouts import (
     LayoutBrief,
     LayoutReviewStatus,
     LayoutSourceRef,
+    active_layout_ids,
     mirror_legacy_layout_fields,
     sync_selected_layout_refs,
 )
@@ -246,8 +247,17 @@ async def handle_layout_tool(
                 state_description=target.state_description,
                 time_hint=target.time_hint,
             )
+        # A revision must never silently grow the active H3 Layout set.
+        # Revising an active Layout appends into the slot the target vacates
+        # (the target is rejected or superseded below, so the active set size
+        # stays the same and unrelated appended states survive). Revising a
+        # historical, non-active Layout replaces the current active set so
+        # the fixed composition becomes the shot's single reference.
+        revision_mode = (
+            "append" if target.id in active_layout_ids(shot) else "replace"
+        )
         revision_brief = revision_brief.model_copy(
-            update={"activation_mode": "append"}
+            update={"activation_mode": revision_mode}
         )
 
         reviewed = review_layout_reference(

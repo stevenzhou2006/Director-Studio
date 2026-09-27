@@ -26,6 +26,7 @@ from typing import Any
 
 from ...pipelines.poem_overlay import timing
 from ..projects.models import Shot
+from ..projects.store import load_project, load_shot
 from ..schemas import JobRecord, JobStatus, OutputSlot
 from . import store
 
@@ -43,6 +44,36 @@ def get_poem_dict(shot: Shot) -> dict[str, Any]:
         return {}
     poem = meta.get("poem")
     return poem if isinstance(poem, dict) else {}
+
+
+def _has_poem_identity(shot: Shot) -> bool:
+    poem = get_poem_dict(shot)
+    return bool(str(poem.get("title") or "").strip()) and bool(
+        str(poem.get("author") or "").strip()
+    )
+
+
+def is_first_poem_shot(project_id: str, shot_id: str) -> bool:
+    """Return True when ``shot_id`` is the first poem-bearing shot in the project.
+
+    The title card must appear exactly once in the concatenated film, on the
+    first shot that actually carries poem title/author metadata. Walking
+    ``project.shot_ids`` (the source of truth for order) makes this
+    deterministic regardless of the order finalize jobs happen to run in.
+    If the project or its shot list cannot be resolved, fall back to showing
+    the title (preserves legacy single-shot behaviour).
+    """
+    project = load_project(project_id)
+    if project is None or not project.shot_ids:
+        return True
+    for candidate_id in project.shot_ids:
+        if candidate_id == shot_id:
+            return True
+        candidate = load_shot(project_id, candidate_id)
+        if candidate is not None and _has_poem_identity(candidate):
+            return False
+    # shot not listed in project.shot_ids: treat as first.
+    return True
 
 
 def _slot_file(slot: OutputSlot | None, job: JobRecord) -> Path | None:
@@ -151,12 +182,14 @@ async def run_poem_finalize(h3_job: JobRecord, shot: Shot) -> None:
         {"text": str(entry.get("text") or ""), "start_s": start}
         for entry, start in zip(lines, starts)
     ]
+    show_title = is_first_poem_shot(shot.project_id, shot.id)
     job = store.create_job(
         pipeline_id=OVERLAY_PIPELINE_ID,
         asset_kind="productions",
         name=f"finalize: {shot.title}",
         notes=(
-            f"auto-finalize of {h3_job.id}: font-layer title card + "
+            f"auto-finalize of {h3_job.id}: "
+            + ("font-layer title card + " if show_title else "subtitle columns only; ")
             + ("original recitation audio" if replace_audio else "H3 native audio kept")
         ),
         params={
@@ -167,6 +200,7 @@ async def run_poem_finalize(h3_job: JobRecord, shot: Shot) -> None:
             "lines": timed_lines,
             "output_name": f"final_{shot.id}",
             "replace_audio": replace_audio,
+            "show_title": show_title,
             "shot_id": shot.id,
             "source_h3_job_id": h3_job.id,
             "project_id": shot.project_id,

@@ -3623,6 +3623,154 @@ async def test_revise_ref_frame_records_chat_feedback_and_links_new_layout(
     assert any("Recorded dialogue feedback" in note for note in notes)
 
 
+class _ReviseCaptureService:
+    """Fake director service that records the revision brief and appends a layout."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        self.briefs = []
+
+    async def queue_reference_frame(self, shot_id: str, *, brief, force=False):
+        self.briefs.append(brief)
+        current = load_shot(self.project_id, shot_id)
+        assert current is not None
+        replacement = LayoutReference(
+            id="lref_replacement",
+            asset_id="lay_replacement",
+            job_id="job_replacement",
+            purpose=brief.purpose,
+            state_description=brief.state_description,
+            time_hint=brief.time_hint,
+            source_refs=list(brief.source_refs),
+            activation_mode=brief.activation_mode,
+            review_status=LayoutReviewStatus.pending_review,
+        )
+        updated = current.model_copy(
+            update={"layout_refs": [*current.layout_refs, replacement]}
+        )
+        save_shot(updated)
+        return updated
+
+
+@pytest.mark.asyncio
+async def test_revise_ref_frame_on_inactive_layout_uses_replace_mode(
+    tmp_projects_dir,
+):
+    """Revising a historical non-active Layout must not grow the active set.
+
+    Regression: the 唐诗-相思 project ended with two 'in use' layouts per shot
+    because a revision of an already-rejected original was forced to append
+    while a different layout was still active.
+    """
+    project = create_project("Inactive revise replace", "Lu faces door seven.")
+    active_primary = LayoutReference(
+        id="lref_active_primary",
+        asset_id="lay_active_primary",
+        job_id="job_active_primary",
+        purpose="current active composition",
+        review_status=LayoutReviewStatus.pending_review,
+        selected_for_h3=True,
+    )
+    historical_rejected = LayoutReference(
+        id="lref_historical",
+        asset_id="lay_historical",
+        job_id="job_historical",
+        purpose="earlier rejected original",
+        review_status=LayoutReviewStatus.reject,
+        selected_for_h3=False,
+    )
+    shot = Shot(
+        id="sht_inactive_revise",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Door seven",
+        script_beat="Lu faces door seven.",
+        duration_s=6.0,
+        status=ShotStatus.needs_review,
+        layout_asset_id="lay_active_primary",
+        layout_refs=[active_primary, historical_rejected],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    svc = _ReviseCaptureService(project.id)
+    await _run_tools(
+        project_id=project.id,
+        tools=[
+            {
+                "name": "revise_ref_frame",
+                "args": {
+                    "shot_id": shot.id,
+                    "layout_ref_id": historical_rejected.id,
+                    "feedback": "redraw with correct geography",
+                },
+            }
+        ],
+        svc=svc,
+        actions=[],
+        user_feedback="用这个旧版重画一版",
+    )
+
+    assert svc.briefs[0].activation_mode == "replace"
+
+
+@pytest.mark.asyncio
+async def test_revise_ref_frame_on_active_layout_keeps_append_mode(
+    tmp_projects_dir,
+):
+    """Revising the active Layout appends into the slot the target vacates."""
+    project = create_project("Active revise append", "Lu faces door seven.")
+    active_primary = LayoutReference(
+        id="lref_active_primary",
+        asset_id="lay_active_primary",
+        job_id="job_active_primary",
+        purpose="current active composition",
+        review_status=LayoutReviewStatus.usable,
+        selected_for_h3=True,
+    )
+    appended_state = LayoutReference(
+        id="lref_appended_state",
+        asset_id="lay_appended_state",
+        job_id="job_appended_state",
+        purpose="second state of the same shot",
+        review_status=LayoutReviewStatus.usable,
+        selected_for_h3=True,
+    )
+    shot = Shot(
+        id="sht_active_revise",
+        project_id=project.id,
+        scene_id="sc01",
+        title="Door seven",
+        script_beat="Lu faces door seven.",
+        duration_s=6.0,
+        status=ShotStatus.needs_review,
+        layout_asset_id="lay_active_primary",
+        layout_refs=[active_primary, appended_state],
+    )
+    save_shot(shot)
+    save_project(project.model_copy(update={"shot_ids": [shot.id]}))
+
+    svc = _ReviseCaptureService(project.id)
+    await _run_tools(
+        project_id=project.id,
+        tools=[
+            {
+                "name": "revise_ref_frame",
+                "args": {
+                    "shot_id": shot.id,
+                    "layout_ref_id": active_primary.id,
+                    "feedback": "tighten the framing",
+                },
+            }
+        ],
+        svc=svc,
+        actions=[],
+        user_feedback="这张构图再紧一点",
+    )
+
+    assert svc.briefs[0].activation_mode == "append"
+
+
 @pytest.mark.asyncio
 async def test_accept_ref_frame_records_chat_decision_and_selects_layout(
     tmp_projects_dir,

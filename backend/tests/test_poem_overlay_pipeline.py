@@ -79,6 +79,63 @@ def test_render_poem_overlay_produces_web_ready_h264(tmp_path: Path):
     assert "High" in probe
 
 
+def _capture_render_command(monkeypatch):
+    captured: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spy_run(cmd, *args, **kwargs):
+        captured.append(list(cmd))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(overlay.subprocess, "run", spy_run)
+    return captured
+
+
+def test_render_poem_overlay_show_title_false_omits_title_card(tmp_path: Path, monkeypatch):
+    """show_title=False must drop the title input and its overlay from the graph."""
+    source = tmp_path / "src.mp4"
+    _make_video(source, seconds=4)
+    captured = _capture_render_command(monkeypatch)
+
+    meta = overlay.render_poem_overlay(
+        input_path=source,
+        output_path=tmp_path / "out.mp4",
+        title="相思",
+        author="王维",
+        lines=[("春来发几枝", 0.5)],
+        show_title=False,
+    )
+
+    assert meta["title_shown"] is False
+    command = captured[-1]
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "[ttl]" not in filter_complex
+    assert "《" not in "".join(command)
+    # Only the source video plus one column and one seal are image inputs.
+    assert command.count("-loop") == 2
+
+
+def test_render_poem_overlay_show_title_true_keeps_title_card(tmp_path: Path, monkeypatch):
+    source = tmp_path / "src.mp4"
+    _make_video(source, seconds=4)
+    captured = _capture_render_command(monkeypatch)
+
+    meta = overlay.render_poem_overlay(
+        input_path=source,
+        output_path=tmp_path / "out.mp4",
+        title="相思",
+        author="王维",
+        lines=[("红豆生南国", 0.5)],
+    )
+
+    assert meta["title_shown"] is True
+    command = captured[-1]
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "[ttl]" in filter_complex
+    # title + column + seal image inputs.
+    assert command.count("-loop") == 3
+
+
 def test_render_poem_overlay_requires_title_and_lines(tmp_path: Path):
     source = tmp_path / "src.mp4"
     _make_video(source, seconds=3)

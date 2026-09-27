@@ -413,11 +413,17 @@ def render_poem_overlay(
     serif_font: str | None = None,
     work_dir: Path | None = None,
     replacement_audio: Path | None = None,
+    show_title: bool = True,
 ) -> dict[str, float | int | bool]:
     """Render the title card and vertical poem columns onto ``input_path``.
 
     ``lines`` is an ordered list of ``(text, start_seconds)``. Returns render
     metadata (duration, column count, resolved dimensions).
+
+    ``show_title`` gates the ``《title》 dynasty · author`` card. Per-shot
+    finalize keeps it ``False`` for every shot except the first, so the card
+    appears exactly once in the concatenated film while each shot still gets
+    its own subtitle column and seal.
 
     When ``replacement_audio`` is given, the source video's audio track is
     discarded and this exact recording is muxed in instead (padded with silence
@@ -462,16 +468,6 @@ def render_poem_overlay(
     temp_root = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="poem-overlay-"))
     temp_root.mkdir(parents=True, exist_ok=True)
     try:
-        title_png = _build_title_card(
-            title=clean_title,
-            author=clean_author,
-            dynasty=str(dynasty or "唐"),
-            seal_text=seal_text or "狸",
-            calligraphy=calligraphy,
-            serif=serif,
-            scale=scale,
-            work_dir=temp_root,
-        )
         column_paths: list[Path] = []
         for position, (text, _start) in enumerate(clean_lines):
             column_path, _ = _build_column(
@@ -490,35 +486,47 @@ def render_poem_overlay(
             work_dir=temp_root,
         )
 
-        title_in, title_out = 2.0, min(6.0, max(3.0, duration - 3.0))
-        title_x = round(36 * scale)
-        title_y = round(84 * scale)
         top_y = round(60 * scale)
         step = round(66 * scale)
         start_x = canvas_width - round(96 * scale)
 
-        inputs = [
-            "-i",
-            str(input_path),
-            "-framerate",
-            "24",
-            "-loop",
-            "1",
-            "-i",
-            str(title_png),
-        ]
-        title_filter = (
-            f"[1:v]format=rgba,fade=t=in:st={title_in}:d=0.8:alpha=1,"
-            f"fade=t=out:st={title_out}:d=0.8:alpha=1[ttl];"
-            f"[0:v][ttl]overlay={title_x}:{title_y}:"
-            f"enable='between(t,{title_in - 0.01},{title_out + 0.81})'[cv0]"
-        )
-        parts = [title_filter]
-        previous = "cv0"
+        inputs = ["-i", str(input_path)]
+        parts: list[str] = []
+        previous = "0:v"
+        if show_title:
+            title_png = _build_title_card(
+                title=clean_title,
+                author=clean_author,
+                dynasty=str(dynasty or "唐"),
+                seal_text=seal_text or "狸",
+                calligraphy=calligraphy,
+                serif=serif,
+                scale=scale,
+                work_dir=temp_root,
+            )
+            title_in, title_out = 2.0, min(6.0, max(3.0, duration - 3.0))
+            title_x = round(36 * scale)
+            title_y = round(84 * scale)
+            inputs += [
+                "-framerate",
+                "24",
+                "-loop",
+                "1",
+                "-i",
+                str(title_png),
+            ]
+            parts.append(
+                f"[1:v]format=rgba,fade=t=in:st={title_in}:d=0.8:alpha=1,"
+                f"fade=t=out:st={title_out}:d=0.8:alpha=1[ttl];"
+                f"[0:v][ttl]overlay={title_x}:{title_y}:"
+                f"enable='between(t,{title_in - 0.01},{title_out + 0.81})'[cv0]"
+            )
+            previous = "cv0"
+        base_input = 2 if show_title else 1
         column_x = start_x
         column_heights: list[int] = []
         for position, (text, start) in enumerate(clean_lines):
-            input_index = position + 2
+            input_index = position + base_input
             fade_out = max(duration - 1.2, start + 1.0) if duration else start + 1.0
             inputs += [
                 "-framerate",
@@ -541,7 +549,7 @@ def render_poem_overlay(
 
         last_start = clean_lines[-1][1]
         last_end = last_start + 2.2
-        seal_input_index = len(clean_lines) + 2
+        seal_input_index = len(clean_lines) + base_input
         inputs += [
             "-framerate",
             "24",
@@ -561,8 +569,9 @@ def render_poem_overlay(
 
         audio_input_index: int | None = None
         if replacement_audio is not None:
-            # Inputs: 0=source video, 1=title, 2..N+1=columns, N+2=seal.
-            audio_input_index = len(clean_lines) + 3
+            # Inputs: 0=source video, [1=title when shown],
+            # columns, then seal; audio follows the seal.
+            audio_input_index = len(clean_lines) + base_input + 1
             inputs = [*inputs, "-i", str(replacement_audio)]
             # Pad to a finite length: an infinite apad combined with the
             # looped-PNG overlay graph never lets -shortest terminate.
@@ -623,4 +632,5 @@ def render_poem_overlay(
         "width": canvas_width,
         "height": canvas_height,
         "audio_replaced": replacement_audio is not None,
+        "title_shown": bool(show_title),
     }

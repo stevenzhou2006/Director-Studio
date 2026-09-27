@@ -260,6 +260,11 @@ def _selected_layouts_for_h3(shot: Shot) -> list[LayoutReference]:
     return [current]
 
 
+def active_layout_ids(shot: Shot) -> set[str]:
+    """Return the ids of LayoutReferences currently driving the H3 Picture pack."""
+    return {layout.id for layout in _selected_layouts_for_h3(shot)}
+
+
 def sync_selected_layout_refs(shot: Shot) -> Shot:
     """Rebuild H3 Pictures from the Shot's explicitly active Layout set.
 

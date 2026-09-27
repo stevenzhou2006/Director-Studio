@@ -42,8 +42,10 @@ Example: Mia's attributed whisper plus Voice asset `voice_mia_01` becomes `audio
 
 ## Stage guidance
 
-Load the relevant stage guide when the task calls for script planning, reference strategy, reference-frame generation, scene/room design, background persistence, character persistence, visual QC, H3 prompt writing, or video QC. The core contract remains mandatory for every task; stage guides add focused checks without replacing creative judgment.
+Load the relevant stage guide when the task calls for script planning, duration budgeting, shot transitions, reference strategy, reference-frame generation, scene/room design, background persistence, character persistence, visual QC, H3 prompt writing, or video QC. The core contract remains mandatory for every task; stage guides add focused checks without replacing creative judgment.
 
+- `duration-budget`: match spoken or recited content to the clip's seconds — a speech-unit budget per duration, a shot-count density, one action chain per clip, and fill-first-then-split on hard boundaries. Applies to human dialogue and to animal or poem recitation alike.
+- `shot-transitions`: classify each shot boundary as a continuous split (one action cut by the 15s limit — use a tail-frame Layout and carry momentum, camera, and pose across the seam) or an independent cut (a clean new framing), and pin the end-frame state so the next unit resets or continuity can be verified.
 - `scene-design`: treat a location as a reusable asset with a canonical establishing plate, locked topology (doors, windows, fixed furniture, light direction), and a coverage grid of camera angles derived only by moving the camera.
 - `background-continuity`: every shot in an established location attaches the approved Scene reference, picks the angle matching the camera axis, keeps fixed landmarks and light direction stable, and reuses the anchored scene asset per `scene_id`.
 - `character-continuity`: one canonical actor asset and view per character across the project, no silent `file_key` switching, per-actor Picture binding in multi-actor shots, and explicit wardrobe changes only.

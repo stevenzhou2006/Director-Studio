@@ -21,3 +21,7 @@ Compare sibling candidates for compatible geometry, screen direction, identity, 
 ## Record the decision
 
 Classify the Layout as usable, usable with repair, or rejected, and record observed evidence rather than assuming success from a completed job.
+
+## Continuity Layout checks
+
+When the Layout is a tail-frame or cross-shot continuity reference, confirm it actually shows the end state it is meant to carry — subject position, posture, gaze, contact, held props, and light direction — so the next shot can continue from a believable seam. A continuity Layout is an ordinary whole-clip Picture: reject any framing that only makes sense if the reference were treated as a time-addressable first or last frame.

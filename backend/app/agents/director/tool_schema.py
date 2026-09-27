@@ -825,13 +825,23 @@ def director_chat_guides(
     current_message: str = "",
 ) -> tuple[str, ...]:
     guides: list[str] = []
+    message = current_message or ""
     if project.script_locked:
         guides.append("script-planning")
+        guides.append("duration-budget")
+    if re.search(
+        r"(?:时长|节奏|字数|台词量|分段|拆分|转场|衔接|连续|拼接|一镜到底|过场|"
+        r"duration|pacing|segment|transition|continuity|handoff|stitch)",
+        message,
+        re.IGNORECASE,
+    ):
+        if "duration-budget" not in guides:
+            guides.append("duration-budget")
+        guides.append("shot-transitions")
     if explicit_gpt_image_intent(current_message) and not actor_design_intent(
         current_message
     ):
         guides.append("reference-frame-generation")
-    message = current_message or ""
     if re.search(
         r"(?:tts|text[\s-]?to[\s-]?speech|\bspeech\b|语音|配音|朗读|吟诵|方言|口音|"
         r"隆昌|四川话|旁白|narration|voice[\s-]?over)",

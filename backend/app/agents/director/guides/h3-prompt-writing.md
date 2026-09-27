@@ -61,6 +61,30 @@ A typical Director poem shot reads `[reference generation + audio reference]`.
 
 A label assigned in `subject_definitions` keeps the same meaning in `summary`, `retention_analysis`, `detailed_description`, and the audio sections. Do not redefine, renumber, or drop a label mid-prompt, and do not reference a `<Picture N>` or `<Audio N>` that was not submitted.
 
+## Name the camera move concretely
+
+Describe camera work with a specific movement, amplitude, and speed rather than a vague "cinematic shot". Use the standard vocabulary and combine it when the move is compound:
+
+- **Dolly in / dolly out** — the camera physically pushes toward or pulls back from the subject (changes perspective, not just framing).
+- **Truck left / truck right** — the camera travels laterally, parallel to the plane.
+- **Pan left / pan right** — the camera rotates horizontally on a fixed pivot.
+- **Tilt up / tilt down** — the camera rotates vertically on a fixed pivot.
+- **Pedestal up / down** — the whole camera rises or lowers vertically.
+- **Orbit** — a circular move around the subject; state it as a compound `truck left + pan right` (or the reverse) so the model reads both the travel and the rotation.
+- **Handheld** — a breathing, slightly unstable frame; say how much shake (subtle vs pronounced).
+- **Over-the-shoulder (OTS)** — frame past one subject's shoulder or head onto the other.
+- **Crane / jib** — a vertical sweeping move that also reveals scale.
+
+Tie the move to the beat: a slow dolly-in for a growing realization, a held locked-off frame for a deadpan line, a quick pan to follow a turn. Do not stack multiple large moves in one short shot.
+
+## Make the listener react
+
+In any shot with more than one subject, the non-speaking subject must show a concrete, visible reaction to the specific line just heard — an eye shift, a held breath, a jaw tightening, a small step, a hand curling — not a generic "listening carefully" or "watching". Reaction is what sells a dialogue exchange; an inert listener reads as a still image.
+
+## Pin the end-frame state
+
+Close `detailed_description` on an explicit final state so the next shot can continue from it or QC can verify continuity: each subject's position, posture, and gaze; distance and any contact between them; held props and their state and location; camera framing and light direction. Do not let a subject, a held object, or a contact vanish or teleport between the described end state and the next shot's opening.
+
 <!--
 source: MiniMax-AI/MiniMax-H3 skills/h3-prompt-writing (references/ref-en.txt)
 pinned commit: d21241f0a4b3acbb34c97dae47fa417b7065e438 (2026-08-15)

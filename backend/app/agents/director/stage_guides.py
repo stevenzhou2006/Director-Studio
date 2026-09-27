@@ -9,6 +9,8 @@ from pathlib import Path
 GUIDE_IDS = frozenset(
     {
         "script-planning",
+        "duration-budget",
+        "shot-transitions",
         "storyboard-validation",
         "reference-strategy",
         "reference-frame-generation",

@@ -66,6 +66,31 @@ def test_chat_guides_load_audio_and_overlay_guidance_on_intent(tmp_projects_dir)
     assert "poem-subtitle-overlay" not in plain
 
 
+def test_chat_guides_load_duration_and_transition_guidance(tmp_projects_dir):
+    locked = create_project("Locked", "A short film.")
+    locked = locked.model_copy(update={"script_locked": True})
+
+    budget = director_chat_guides(
+        locked, include_visual_qc=False, current_message="review shot 1"
+    )
+    transitions = director_chat_guides(
+        locked, include_visual_qc=False, current_message="这两段之间是转场还是连续镜头？"
+    )
+    unlocked_transition = director_chat_guides(
+        create_project("Unlocked", "draft"),
+        include_visual_qc=False,
+        current_message="how long should each segment be",
+    )
+
+    # script_locked always brings the budget discipline along with planning
+    assert "duration-budget" in budget
+    assert "shot-transitions" not in budget
+    # transition/continuity wording pulls the transition guide
+    assert "shot-transitions" in transitions
+    # duration/pacing wording on an unlocked project still loads the budget
+    assert "duration-budget" in unlocked_transition
+
+
 class _TtsPipeline:
     def __init__(self) -> None:
         self.saved = None

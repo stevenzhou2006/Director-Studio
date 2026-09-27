@@ -3246,7 +3246,9 @@ async def test_locked_project_omits_set_script_on_every_native_turn_and_rejects_
         not in {tool["function"]["name"] for tool in call["tools"]}
         for call in calls
     )
-    assert all(call["guides"] == ("script-planning",) for call in calls)
+    assert all(
+        call["guides"] == ("script-planning", "duration-budget") for call in calls
+    )
     assert replay_result["ok"] is False
     assert replay_result["tool_name"] == "set_script"
     assert replay_result["save_storyboard_submissions"] == 0

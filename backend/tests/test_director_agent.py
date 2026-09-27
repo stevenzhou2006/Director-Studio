@@ -560,6 +560,8 @@ async def test_plan_and_h3_writer_request_different_guides(director_dirs):
 
     assert provider.calls[0].guides == (
         "script-planning",
+        "duration-budget",
+        "shot-transitions",
         "character-continuity",
         "background-continuity",
         "prop-continuity",

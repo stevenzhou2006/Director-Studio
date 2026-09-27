@@ -77,6 +77,23 @@ def test_continuity_stage_guides_teach_persistence():
     assert "mechanism" in prop.lower()
 
 
+def test_duration_budget_and_transition_guides_load():
+    budget = stage_guides.load_stage_guides(("duration-budget",))
+    transitions = stage_guides.load_stage_guides(("shot-transitions",))
+
+    assert '<DIRECTOR_STAGE_GUIDE id="duration-budget">' in budget
+    assert "36–44" in budget
+    assert "hard cap" in budget.lower() or "48" in budget
+    assert "one action chain" in budget.lower()
+    assert "fill" in budget.lower() and "split" in budget.lower()
+
+    assert '<DIRECTOR_STAGE_GUIDE id="shot-transitions">' in transitions
+    assert "continuous" in transitions.lower()
+    assert "independent cut" in transitions.lower()
+    assert "tail-frame" in transitions.lower()
+    assert "end-frame" in transitions.lower()
+
+
 def test_stage_guide_registry_matches_non_empty_markdown_files():
     guide_dir = stage_guides._guides_dir()
     guide_files = {path.stem for path in guide_dir.glob("*.md")}

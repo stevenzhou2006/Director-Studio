@@ -1145,6 +1145,8 @@ class DirectorService:
                 user,
                 guides=(
                     "script-planning",
+                    "duration-budget",
+                    "shot-transitions",
                     "character-continuity",
                     "background-continuity",
                     "prop-continuity",
@@ -1171,6 +1173,8 @@ class DirectorService:
                     repair_user,
                     guides=(
                         "script-planning",
+                        "duration-budget",
+                        "shot-transitions",
                         "character-continuity",
                         "background-continuity",
                         "prop-continuity",

@@ -1853,7 +1853,8 @@ async def replace_shot_materials_endpoint(
         asset = load_asset(kind, material.asset_id)
         if asset is None:
             raise HTTPException(404, f"Library asset not found: {kind}/{material.asset_id}")
-        if asset.project_id not in (None, shot.project_id):
+        shared_globally = kind == "actors" and asset.is_global
+        if asset.project_id not in (None, shot.project_id) and not shared_globally:
             raise HTTPException(400, f"asset belongs to another project: {material.asset_id}")
         file_key = (material.file_key or "").strip()
         if file_key and not (asset.files or {}).get(file_key):

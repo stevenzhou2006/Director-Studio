@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { OutputSlot, Shot } from "../../shared/api/types";
 import { Lightbox } from "../../shared/components/Lightbox";
+import { useProject } from "../../shared/project/ProjectContext";
 import {
   attachVoiceToShot,
   detachVoiceFromShot,
   getProjectShots,
+  setActorGlobal,
   type LibraryAsset,
 } from "./api";
 
@@ -194,18 +196,85 @@ function VoiceShotAttachPanel({ asset }: { asset: LibraryAsset }) {
   );
 }
 
+function GlobalActorToggle({
+  asset,
+  busy = false,
+  onUpdated,
+}: {
+  asset: LibraryAsset;
+  busy?: boolean;
+  onUpdated?: (updated: LibraryAsset) => void;
+}) {
+  const { projectId, projects, notifyLibraryChanged } = useProject();
+  const [pending, setPending] = useState(false);
+  const [note, setNote] = useState("");
+  const isOwner = asset.project_id == null || asset.project_id === projectId;
+
+  if (!isOwner) {
+    const owner = projects.find((p) => p.id === asset.project_id);
+    return (
+      <span className="global-actor-note muted tiny">
+        Global · shared from {owner?.name || "another project"}
+      </span>
+    );
+  }
+
+  const isGlobal = Boolean(asset.is_global);
+  const toggle = async () => {
+    const next = !isGlobal;
+    const message = next
+      ? `Publish “${asset.name}” to Global Assets?\n\nEvery project can then cast this actor, keeping the character consistent across your videos.`
+      : `Remove “${asset.name}” from Global Assets?\n\nOther projects will no longer be able to add it. Shots that already use it keep working.`;
+    if (!window.confirm(message)) return;
+    setPending(true);
+    setNote("");
+    try {
+      const result = await setActorGlobal(asset.id, next);
+      onUpdated?.(result.asset);
+      notifyLibraryChanged();
+      if (!next && result.external_project_ids.length > 0) {
+        setNote(
+          `Withdrawn. Still used by ${result.external_project_ids.length} other project(s); their existing shots keep this actor.`,
+        );
+      }
+    } catch (cause) {
+      setNote(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <span className="global-actor-toggle">
+      <button
+        type="button"
+        className={isGlobal ? "btn secondary sm" : "btn primary sm"}
+        disabled={busy || pending}
+        onClick={() => void toggle()}
+      >
+        {pending ? "…" : isGlobal ? "Remove from Global" : "Add to Global Assets"}
+      </button>
+      {note ? (
+        <small className="global-actor-note muted tiny">{note}</small>
+      ) : null}
+    </span>
+  );
+}
+
 export function AssetDetailDialog({
   asset,
   busy = false,
   onClose,
   onDelete,
   onEdit,
+  onGlobalUpdated,
 }: {
   asset: LibraryAsset;
   busy?: boolean;
   onClose: () => void;
   onDelete?: () => void;
   onEdit?: () => void;
+  onGlobalUpdated?: (updated: LibraryAsset) => void;
 }) {
   const slots = useMemo(() => assetSlots(asset), [asset]);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -222,7 +291,12 @@ export function AssetDetailDialog({
         <div className="folder-modal-panel" onClick={(event) => event.stopPropagation()}>
           <div className="folder-modal-head">
             <div>
-              <h2 className="folder-modal-title">{asset.name}</h2>
+              <h2 className="folder-modal-title">
+                {asset.name}
+                {asset.kind === "actors" && asset.is_global ? (
+                  <span className="global-badge">Global</span>
+                ) : null}
+              </h2>
               <p className="muted tiny">
                 {asset.kind} · {asset.pipeline_id || "asset"}
                 {asset.job_id ? ` · ${asset.job_id}` : ""}
@@ -231,6 +305,13 @@ export function AssetDetailDialog({
               {asset.notes ? <p className="folder-modal-notes">{asset.notes}</p> : null}
             </div>
             <div className="folder-modal-actions">
+              {asset.kind === "actors" ? (
+                <GlobalActorToggle
+                  asset={asset}
+                  busy={busy}
+                  onUpdated={onGlobalUpdated}
+                />
+              ) : null}
               {onEdit ? (
                 <button type="button" className="btn secondary sm" disabled={busy} onClick={onEdit}>
                   Edit

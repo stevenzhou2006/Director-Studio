@@ -2299,6 +2299,47 @@ h2 {
   color: var(--text, #e8eef7);
 }
 
+.global-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #57c7a3 55%, transparent);
+  background: color-mix(in srgb, #57c7a3 14%, transparent);
+  color: #7fdcc0;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.global-actor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.global-actor-note {
+  white-space: normal;
+}
+
+.global-save-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted, #9fb0c3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.global-save-check input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #57c7a3;
+}
+
 .library-meta {
   padding: 0.75rem 0.85rem 1rem;
 }
@@ -3655,11 +3696,19 @@ select {
 }
 
 .mobile-library-preview {
+  position: relative;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 0.55rem;
   background: var(--bg);
   aspect-ratio: 4 / 3;
+}
+
+.mobile-library-preview .global-badge {
+  position: absolute;
+  top: 0.3rem;
+  left: 0.3rem;
+  margin-left: 0;
 }
 
 .mobile-library-preview img {

@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LibraryOverview } from "./LibraryOverview";
 import { deleteLibraryAsset, listLibraryAssets } from "../library/api";
 
 const updateLibraryAssetMock = vi.hoisted(() => vi.fn());
+const setActorGlobalMock = vi.hoisted(() => vi.fn());
 const projectState = vi.hoisted(() => ({ revision: 0 }));
 
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({
     projectId: "prj_test",
+    projects: [{ id: "prj_other", name: "Other film" }],
     notifyLibraryChanged: vi.fn(),
     libraryRevision: projectState.revision,
   }),
@@ -21,6 +23,7 @@ vi.mock("../library/api", () => ({
   importExternalAsset: vi.fn(),
   listLibraryAssets: vi.fn(),
   updateLibraryAsset: updateLibraryAssetMock,
+  setActorGlobal: setActorGlobalMock,
 }));
 
 const actor = {
@@ -113,5 +116,41 @@ describe("LibraryOverview asset details", () => {
 
     expect(await screen.findByRole("dialog", { name: "Mara profile assets" })).toBeTruthy();
     expect(screen.getByText("Right-facing continuity angle")).toBeTruthy();
+  });
+
+  it("shows a Global chip on shared actors and blocks owner actions", async () => {
+    const shared = {
+      ...actor,
+      id: "act_shared",
+      name: "Shared Hero",
+      project_id: "prj_other",
+      is_global: true,
+    };
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
+      kind === "actors" ? [shared] : [],
+    );
+    render(<LibraryOverview onSelectKind={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Shared Hero asset set" }));
+    const dialog = screen.getByRole("dialog", { name: "Shared Hero assets" });
+    expect(within(dialog).getByText("Global")).toBeTruthy();
+    expect(within(dialog).getByText("Global · shared from Other film")).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("publishes the owned actor from the overview detail", async () => {
+    setActorGlobalMock.mockResolvedValueOnce({
+      asset: { ...actor, is_global: true },
+      external_project_ids: [],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<LibraryOverview onSelectKind={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Mara asset set" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to Global Assets" }));
+
+    await waitFor(() => expect(setActorGlobalMock).toHaveBeenCalledWith("act_mara", true));
+    expect(screen.getByRole("button", { name: "Remove from Global" })).toBeTruthy();
   });
 });

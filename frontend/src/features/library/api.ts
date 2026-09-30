@@ -22,6 +22,28 @@ export interface LibraryAsset {
   meta: Record<string, unknown>;
   urls: Record<string, string>;
   project_id: string | null;
+  is_global?: boolean;
+}
+
+export interface SetGlobalResult {
+  asset: LibraryAsset;
+  external_project_ids: string[];
+}
+
+export async function setActorGlobal(
+  assetId: string,
+  isGlobal: boolean,
+): Promise<SetGlobalResult> {
+  const res = await fetch(
+    `/api/library/actors/${encodeURIComponent(assetId)}/global`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_global: isGlobal }),
+    },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
 }
 
 export async function listLibraryAssets(

@@ -357,7 +357,14 @@ export function ShotMaterialEditor({
                 <section className="shot-material-library-group" key={asset.id}>
                   <header>
                     <span>{asset.kind === "layouts" ? "Layout" : asset.kind.slice(0, -1)}</span>
-                    <strong>{asset.name}</strong>
+                    <strong>
+                      {asset.name}
+                      {asset.kind === "actors" &&
+                      asset.is_global &&
+                      asset.project_id !== shot.project_id ? (
+                        <span className="global-badge">Global</span>
+                      ) : null}
+                    </strong>
                     <small>{variants.length} {variants.length === 1 ? "image" : "images"}</small>
                   </header>
                   <div className="shot-material-library-variants">

@@ -4,6 +4,7 @@ import { Lightbox } from "../../shared/components/Lightbox";
 import { OutputGrid } from "../../shared/components/OutputGrid";
 import type { OutputSlot } from "../../shared/api/types";
 import { useProject } from "../../shared/project/ProjectContext";
+import { setActorGlobal } from "../library/api";
 import {
   cancelJob,
   fetchDefaults,
@@ -44,6 +45,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [job, setJob] = useState<JobRecord | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveGlobal, setSaveGlobal] = useState(false);
   const [savedActor, setSavedActor] = useState<ActorRecord | null>(null);
   const [lightbox, setLightbox] = useState<{ slots: OutputSlot[]; index: number } | null>(null);
 
@@ -77,6 +79,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
     setFormError(null);
     setJob(null);
     setBusy(false);
+    setSaveGlobal(false);
     setSavedActor(null);
     setLightbox(null);
     if (!projectId) return;
@@ -172,11 +175,15 @@ export function CastingPage({ onOpenLibrary }: Props) {
     }
     setBusy(true);
     try {
-      const actor = await saveJob(job.id, {
+      let actor = await saveJob(job.id, {
         name: name.trim(),
         notes,
         project_id: projectId,
       });
+      if (saveGlobal) {
+        const result = await setActorGlobal(actor.id, true);
+        actor = { ...actor, is_global: result.asset.is_global };
+      }
       setSavedActor(actor);
       setJob({ ...job, actor_id: actor.id });
       notifyLibraryChanged();
@@ -199,6 +206,7 @@ export function CastingPage({ onOpenLibrary }: Props) {
     setFieldErrors({});
     setFormError(null);
     setJob(null);
+    setSaveGlobal(false);
     setSavedActor(null);
     if (defaults) {
       setDescription(defaults.default_description);
@@ -469,11 +477,21 @@ export function CastingPage({ onOpenLibrary }: Props) {
             <button type="button" className="btn secondary" disabled={!job || isRunning || busy} onClick={onGenerate}>
               Regenerate
             </button>
+            <label className="global-save-check">
+              <input
+                type="checkbox"
+                checked={saveGlobal}
+                disabled={!job || job.status !== "succeeded" || busy || !!job.actor_id}
+                onChange={(e) => setSaveGlobal(e.target.checked)}
+              />
+              Save as Global Asset (share with every project)
+            </label>
           </div>
 
           {savedActor || job?.actor_id ? (
             <div className="banner ok">
               Saved as Actor · <code>{savedActor?.id || job?.actor_id}</code>
+              {savedActor?.is_global ? <span className="global-badge">Global</span> : null}
               <button type="button" className="btn ghost sm" onClick={onOpenLibrary}>
                 View in Library
               </button>

@@ -3,7 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CastingPage } from "./CastingPage";
-import { fetchDefaults, generateActor, listActorJobs, type JobRecord } from "./api";
+import { fetchDefaults, generateActor, listActorJobs, saveJob, type JobRecord } from "./api";
+import { setActorGlobal } from "../library/api";
 
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({
@@ -20,6 +21,10 @@ vi.mock("./api", () => ({
   getJob: vi.fn(),
   cancelJob: vi.fn(),
   saveJob: vi.fn(),
+}));
+
+vi.mock("../library/api", () => ({
+  setActorGlobal: vi.fn(),
 }));
 
 const finishedJob: JobRecord = {
@@ -136,5 +141,46 @@ describe("CastingPage", () => {
     expect(form.get("include_wardrobe")).toBe("false");
     expect(form.get("species")).toBe("quadruped");
     expect(form.get("wardrobe_image")).toBeNull();
+  });
+
+  it("publishes the actor globally when 'Save as Global' is checked", async () => {
+    vi.mocked(generateActor).mockResolvedValue({
+      ...finishedJob,
+      id: "actjob_global",
+      status: "succeeded",
+      name: "Series Lead",
+    });
+    vi.mocked(saveJob).mockResolvedValue({
+      id: "act_new",
+      name: "Series Lead",
+      notes: "",
+      mode: "text",
+      description: "a lead",
+      seed: 42,
+      job_id: "actjob_global",
+      created_at: "2026-09-30T00:00:00Z",
+      files: {},
+      urls: {},
+      project_id: "prj_test",
+    });
+    vi.mocked(setActorGlobal).mockResolvedValueOnce({
+      asset: { is_global: true } as never,
+      external_project_ids: [],
+    });
+
+    render(<CastingPage onOpenLibrary={() => undefined} />);
+    fireEvent.change(screen.getByLabelText(/Name/), { target: { value: "Series Lead" } });
+    fireEvent.change(screen.getByLabelText(/Actor description/), {
+      target: { value: "a lead" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate Actor" }));
+    await waitFor(() => expect(generateActor).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByLabelText(/Save as Global Asset/));
+    fireEvent.click(screen.getByRole("button", { name: "Save to Library" }));
+
+    await waitFor(() => expect(saveJob).toHaveBeenCalledOnce());
+    await waitFor(() => expect(setActorGlobal).toHaveBeenCalledWith("act_new", true));
+    expect(screen.getByText("Global")).toBeTruthy();
   });
 });

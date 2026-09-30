@@ -112,6 +112,8 @@ class LibraryAsset(BaseModel):
     urls: dict[str, str] = Field(default_factory=dict)
     # Project ownership — assets belong to a production project when set
     project_id: str | None = None
+    # Published to the Global Asset library (actors only): shareable across projects
+    is_global: bool = False
 
 
 class HealthResponse(BaseModel):

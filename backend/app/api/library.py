@@ -45,6 +45,21 @@ class UpdateLibraryMetadataBody(BaseModel):
     notes: str | None = None
 
 
+class SetGlobalBody(BaseModel):
+    is_global: bool = Field(
+        ...,
+        description="Publish this actor to the Global Asset library (true) or withdraw it (false)",
+    )
+
+
+class SetGlobalResponse(BaseModel):
+    asset: LibraryAsset
+    external_project_ids: list[str] = Field(
+        default_factory=list,
+        description="Other projects whose shots still reference this actor (on unpublish)",
+    )
+
+
 def _safe_upload_name(name: str | None) -> str:
     base = Path(name or "image.png").name
     base = re.sub(r"[^\w.\-]+", "_", base, flags=re.UNICODE)
@@ -127,6 +142,36 @@ async def assign_one(kind: str, asset_id: str, body: AssignProjectBody) -> Libra
         return assign_asset_project(kind, asset_id, body.project_id)
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+
+
+@router.patch("/library/{kind}/{asset_id}/global", response_model=SetGlobalResponse)
+async def set_asset_global(kind: str, asset_id: str, body: SetGlobalBody) -> SetGlobalResponse:
+    """Publish an actor to (or withdraw it from) the Global Asset library.
+
+    Global actors stay owned by their original project but become visible and
+    usable in every other project, so the same character stays consistent
+    across a series of videos.
+    """
+    if kind not in KINDS:
+        raise HTTPException(400, f"unknown kind: {kind}")
+    if kind != "actors":
+        raise HTTPException(400, "global publishing is only supported for actors")
+    asset = load_asset(kind, asset_id)
+    if asset is None:
+        raise HTTPException(404, "not found")
+    if asset.is_global == body.is_global:
+        return SetGlobalResponse(asset=asset, external_project_ids=[])
+    updated = write_asset(asset.model_copy(update={"is_global": body.is_global}))
+    external: list[str] = []
+    if not body.is_global:
+        for project in list_projects():
+            if project.id == updated.project_id:
+                continue
+            for shot in list_shots(project.id):
+                if any(ref.asset_id == updated.id for ref in shot.refs):
+                    external.append(project.id)
+                    break
+    return SetGlobalResponse(asset=updated, external_project_ids=sorted(set(external)))
 
 
 @router.post("/library/assign-project")

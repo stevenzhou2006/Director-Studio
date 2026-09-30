@@ -18,7 +18,7 @@ def _script_hash(script_text: str) -> str:
 
 
 def _inventory(project_id: str | None = None) -> list[dict[str, Any]]:
-    """Casting pool: project-owned assets plus the unassigned pool."""
+    """Casting pool: project-owned assets, global actors, plus the unassigned pool."""
     items: list[dict[str, Any]] = []
     for kind in LIBRARY_KINDS:
         if kind == "layouts":

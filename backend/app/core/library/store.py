@@ -379,7 +379,8 @@ def list_assets(
                     continue
                 items.append(asset)
                 seen.add(asset.id)
-        # Also any global-pool assets tagged with this project_id (pre-move)
+        # Also any global-pool assets tagged with this project_id (pre-move),
+        # plus actors published to the Global Asset library by other projects.
         for ad in iter_asset_dirs(kind):
             if ad.name in seen:
                 continue
@@ -388,6 +389,9 @@ def list_assets(
                 continue
             ap = asset.project_id or None
             if ap == project_id:
+                items.append(asset)
+                seen.add(asset.id)
+            elif kind == "actors" and asset.is_global:
                 items.append(asset)
                 seen.add(asset.id)
             elif include_unassigned and ap is None:

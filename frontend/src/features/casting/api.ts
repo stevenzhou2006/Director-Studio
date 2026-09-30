@@ -61,6 +61,7 @@ export interface ActorRecord {
   files: Record<string, string | null>;
   urls: Record<string, string>;
   project_id?: string | null;
+  is_global?: boolean;
 }
 
 export interface MetaDefaults {

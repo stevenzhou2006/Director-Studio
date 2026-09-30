@@ -42,6 +42,18 @@ export function LibraryOverview({ onSelectKind }: {
     setEditingAsset(null);
   };
 
+  const isForeignGlobal = (a: LibraryAsset) =>
+    a.kind === "actors" && Boolean(a.is_global) && a.project_id !== projectId;
+
+  const onGlobalUpdated = (updated: LibraryAsset) => {
+    const kind = updated.kind as VisibleLibraryKind;
+    setGroups((current) => ({
+      ...current,
+      [kind]: (current[kind] || []).map((a) => (a.id === updated.id ? updated : a)),
+    }));
+    setDetailAsset((current) => (current?.id === updated.id ? updated : current));
+  };
+
   useEffect(() => {
     let active = true;
     setError(null);
@@ -133,6 +145,9 @@ export function LibraryOverview({ onSelectKind }: {
                       >
                         <div className={`mobile-library-preview${preview ? "" : " empty"}`}>
                           {preview ? <img src={preview} alt="" /> : <span>{group.id === "voices" ? "VOICE" : "ASSET"}</span>}
+                          {asset.kind === "actors" && asset.is_global ? (
+                            <span className="global-badge">Global</span>
+                          ) : null}
                         </div>
                         <strong>{asset.name}</strong>
                       </button>
@@ -175,8 +190,17 @@ export function LibraryOverview({ onSelectKind }: {
           asset={detailAsset}
           busy={busy}
           onClose={() => setDetailAsset(null)}
-          onEdit={() => setEditingAsset(detailAsset)}
-          onDelete={() => void onDeleteAsset(detailAsset)}
+          onEdit={
+            isForeignGlobal(detailAsset)
+              ? undefined
+              : () => setEditingAsset(detailAsset)
+          }
+          onDelete={
+            isForeignGlobal(detailAsset)
+              ? undefined
+              : () => void onDeleteAsset(detailAsset)
+          }
+          onGlobalUpdated={onGlobalUpdated}
         />
       ) : null}
       {editingAsset ? (

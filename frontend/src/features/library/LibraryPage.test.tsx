@@ -6,11 +6,13 @@ import { LibraryPage } from "./LibraryPage";
 import { importExternalAsset, listLibraryAssets } from "./api";
 
 const updateLibraryAssetMock = vi.hoisted(() => vi.fn());
+const setActorGlobalMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../shared/project/ProjectContext", () => ({
   useProject: () => ({
     projectId: "prj_test",
     project: { name: "Voice film" },
+    projects: [{ id: "prj_other", name: "Other film" }],
     notifyLibraryChanged: vi.fn(),
     libraryRevision: 0,
   }),
@@ -21,6 +23,7 @@ vi.mock("./api", () => ({
   importExternalAsset: vi.fn(),
   deleteLibraryAsset: vi.fn(),
   updateLibraryAsset: updateLibraryAssetMock,
+  setActorGlobal: setActorGlobalMock,
 }));
 
 const voiceAsset = {
@@ -131,5 +134,73 @@ describe("LibraryPage Voices", () => {
     })));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Import Actors" })).toBeNull());
     expect(listLibraryAssets).toHaveBeenCalledTimes(2);
+  });
+});
+
+const foreignGlobalActor = {
+  id: "act_series",
+  kind: "actors",
+  name: "Series Hero",
+  notes: "Recurring lead across films",
+  pipeline_id: "actor",
+  job_id: "job_series",
+  seed: 7,
+  created_at: "2026-09-01T00:00:00Z",
+  files: { master: "m.png" },
+  meta: {},
+  urls: { master: "/api/files/library/actors/act_series/m.png" },
+  project_id: "prj_other",
+  is_global: true,
+};
+
+const ownedActor = {
+  id: "act_local",
+  kind: "actors",
+  name: "Local Hero",
+  notes: "",
+  pipeline_id: "actor",
+  job_id: "job_local",
+  seed: 11,
+  created_at: "2026-09-02T00:00:00Z",
+  files: { master: "l.png" },
+  meta: {},
+  urls: { master: "/api/files/library/actors/act_local/l.png" },
+  project_id: "prj_test",
+  is_global: false,
+};
+
+describe("LibraryPage Global actors", () => {
+  afterEach(cleanup);
+
+  it("badges a foreign global actor and hides owner actions", async () => {
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
+      kind === "actors" ? [foreignGlobalActor] : [],
+    );
+    render(<LibraryPage />);
+    await screen.findByText("Series Hero");
+
+    expect(screen.getByText("Global")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit Series Hero metadata" })).toBeNull();
+    expect(screen.queryByTitle("Delete this asset")).toBeNull();
+  });
+
+  it("publishes an owned actor to Global from the detail dialog", async () => {
+    vi.mocked(listLibraryAssets).mockImplementation(async (kind) =>
+      kind === "actors" ? [ownedActor] : [],
+    );
+    setActorGlobalMock.mockResolvedValueOnce({
+      asset: { ...ownedActor, is_global: true },
+      external_project_ids: [],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<LibraryPage />);
+    await screen.findByText("Local Hero");
+
+    fireEvent.click(screen.getByTitle("Open asset folder"));
+    fireEvent.click(await screen.findByRole("button", { name: "Add to Global Assets" }));
+
+    await waitFor(() => expect(setActorGlobalMock).toHaveBeenCalledWith("act_local", true));
+    expect(screen.getByRole("button", { name: "Remove from Global" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add to Global Assets" })).toBeNull();
   });
 });

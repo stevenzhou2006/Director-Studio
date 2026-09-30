@@ -108,6 +108,7 @@ class SaveActorRequest(BaseModel):
     name: str | None = None
     notes: str | None = None
     project_id: str | None = None
+    is_global: bool = False
 
 
 class ActorAssetFiles(BaseModel):
@@ -140,6 +141,7 @@ class ActorRecord(BaseModel):
     files: ActorAssetFiles
     urls: dict[str, str] = Field(default_factory=dict)
     project_id: str | None = None
+    is_global: bool = False
 
     @classmethod
     def from_library(cls, asset: LibraryAsset) -> ActorRecord:
@@ -191,6 +193,7 @@ class ActorRecord(BaseModel):
             files=files,
             urls=urls,
             project_id=asset.project_id,
+            is_global=asset.is_global,
         )
 
 

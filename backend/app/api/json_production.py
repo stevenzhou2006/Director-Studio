@@ -157,7 +157,8 @@ def _linked_picture_bytes(
             400,
             f"Picture {slot.index} links to a missing library asset: {slot.asset_id}",
         )
-    if asset.project_id and asset.project_id != project_id:
+    shared_globally = asset.kind == "actors" and asset.is_global
+    if asset.project_id and asset.project_id != project_id and not shared_globally:
         raise HTTPException(
             400,
             f"Picture {slot.index} asset belongs to another project: {slot.asset_id}",

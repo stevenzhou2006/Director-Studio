@@ -50,6 +50,14 @@ export function LibraryPage({
     setEditingAsset(null);
   };
 
+  const isForeignGlobal = (a: LibraryAsset) =>
+    a.kind === "actors" && Boolean(a.is_global) && a.project_id !== projectId;
+
+  const onGlobalUpdated = (updated: LibraryAsset) => {
+    setAssets((current) => current.map((a) => (a.id === updated.id ? updated : a)));
+    setFolderAsset((current) => (current?.id === updated.id ? updated : current));
+  };
+
   const refresh = useCallback(() => {
     setError(null);
     if (!projectId) {
@@ -188,33 +196,42 @@ export function LibraryPage({
             const nFiles = Object.keys(a.urls || {}).filter((k) => a.urls[k]).length;
             const isVoice = a.kind === "voices";
             const duration = Number(a.meta?.duration_s);
+            const foreign = isForeignGlobal(a);
+            const globalChip =
+              a.kind === "actors" && a.is_global ? (
+                <span className="global-badge">Global</span>
+              ) : null;
             return (
               <article key={a.id} className={`library-card ${isVoice ? "voice-card" : ""}`}>
-                <button
-                  type="button"
-                  className="library-card-edit"
-                  disabled={busy}
-                  aria-label={`Edit ${a.name} metadata`}
-                  title="Edit name and notes"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setEditingAsset(a);
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className="library-card-delete"
-                  disabled={busy}
-                  title="Delete this asset"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void onDeleteAsset(a);
-                  }}
-                >
-                  Delete
-                </button>
+                {!foreign ? (
+                  <button
+                    type="button"
+                    className="library-card-edit"
+                    disabled={busy}
+                    aria-label={`Edit ${a.name} metadata`}
+                    title="Edit name and notes"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setEditingAsset(a);
+                    }}
+                  >
+                    Edit
+                  </button>
+                ) : null}
+                {!foreign ? (
+                  <button
+                    type="button"
+                    className="library-card-delete"
+                    disabled={busy}
+                    title="Delete this asset"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onDeleteAsset(a);
+                    }}
+                  >
+                    Delete
+                  </button>
+                ) : null}
                 {isVoice ? (
                   <div className="library-card-open voice-card-open">
                     <div className="voice-signal-rail" aria-hidden="true">
@@ -261,7 +278,7 @@ export function LibraryPage({
                     ) : null}
                   </div>
                   <div className="library-meta">
-                    <h3>{a.name}</h3>
+                    <h3>{a.name} {globalChip}</h3>
                     <div className="muted tiny">
                       {external ? "external" : a.pipeline_id}
                     </div>
@@ -283,8 +300,17 @@ export function LibraryPage({
           asset={folderAsset}
           busy={busy}
           onClose={() => setFolderAsset(null)}
-          onEdit={() => setEditingAsset(folderAsset)}
-          onDelete={() => void onDeleteAsset(folderAsset)}
+          onEdit={
+            isForeignGlobal(folderAsset)
+              ? undefined
+              : () => setEditingAsset(folderAsset)
+          }
+          onDelete={
+            isForeignGlobal(folderAsset)
+              ? undefined
+              : () => void onDeleteAsset(folderAsset)
+          }
+          onGlobalUpdated={onGlobalUpdated}
         />
       ) : null}
 

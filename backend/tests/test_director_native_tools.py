@@ -873,6 +873,7 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "asset_id",
         "file_key",
         "picture_index",
+        "notes",
     }
     assert set(parameters["$defs"]["VoiceMatchDraft"]["properties"]) == {
         "asset_id",
@@ -881,6 +882,8 @@ def test_save_storyboard_tool_exposes_the_complete_typed_shot_draft_shape():
         "speaker",
         "reason",
     }
+    assert "file_key" not in parameters["$defs"]["VoiceMatchDraft"].get("required", [])
+    assert "auto-resolve" in parameters["$defs"]["VoiceMatchDraft"]["properties"]["file_key"]["description"]
 
 
 def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
@@ -902,6 +905,7 @@ def test_patch_shot_refs_tool_only_accepts_exact_reference_updates():
         "asset_id",
         "file_key",
         "picture_index",
+        "notes",
     }
 
 

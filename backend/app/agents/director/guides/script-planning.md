@@ -15,3 +15,5 @@ When a dramatic beat depends on a model-weak simultaneous composite, duplicate, 
 ## Output check
 
 Every shot states its visible action, speaking character, location, and continuity dependency. Flag uncertainties or intentional discontinuities plainly for human review.
+
+Default to the fewest shots that hold the content (see `duration-budget`): a short film that fits one continuous take should be one shot, and never map one line / one beat to its own clip. For poem recitation, group lines into couplets (or a single take) — finishing is applied once at master level, so shot count is creative, not a fix-cost multiplier.

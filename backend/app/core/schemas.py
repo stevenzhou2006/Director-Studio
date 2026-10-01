@@ -121,6 +121,8 @@ class HealthResponse(BaseModel):
     comfy_reachable: bool
     comfy_error: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+    stale_code: bool = False
+    stale_files: list[str] = Field(default_factory=list)
 
 
 class PipelineInfo(BaseModel):

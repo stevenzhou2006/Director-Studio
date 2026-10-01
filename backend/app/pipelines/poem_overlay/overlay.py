@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -633,4 +634,281 @@ def render_poem_overlay(
         "height": canvas_height,
         "audio_replaced": replacement_audio is not None,
         "title_shown": bool(show_title),
+    }
+
+
+def render_master_overlay(
+    *,
+    input_path: Path,
+    output_path: Path,
+    title: str,
+    author: str,
+    segments: list[dict[str, Any]],
+    recitation_audio: Path | None = None,
+    watermark: str = "",
+    dynasty: str = "唐",
+    seal_text: str = "狸",
+    width: int | None = None,
+    height: int | None = None,
+    calligraphy_font: str | None = None,
+    serif_font: str | None = None,
+    work_dir: Path | None = None,
+    show_title: bool = True,
+) -> dict[str, Any]:
+    """Finish a concatenated master film in one pass.
+
+    ``segments`` is an ordered list, one per shot, each carrying an absolute
+    ``offset_s`` on the master timeline and that shot's ``lines`` as
+    ``(text, local_start_s)`` pairs. Global line start = ``offset_s +
+    local_start_s``. The title card is composited exactly once at the head of
+    the film; every poem column fades in on the master timeline and stays to
+    the end (columns accumulate right-to-left); the last column carries the
+    red seal. When ``recitation_audio`` is given it replaces the whole film's
+    audio track (padded with silence to the master length). When ``watermark``
+    is non-empty it is burned into the bottom-right corner across the entire
+    film. All text is font-composited here; the model-rendered plate stays
+    text-free.
+    """
+    clean_title = str(title or "").strip()
+    clean_author = str(author or "").strip()
+    if not clean_title or not clean_author:
+        raise PoemOverlayError("title and author are required")
+    if not segments:
+        raise PoemOverlayError("at least one segment is required")
+
+    input_path = Path(input_path)
+    if not input_path.is_file():
+        raise PoemOverlayError(f"input video not found: {input_path}")
+    if recitation_audio is not None and not Path(recitation_audio).is_file():
+        raise PoemOverlayError(f"recitation audio not found: {recitation_audio}")
+
+    probe_width, probe_height, duration, has_audio = _probe_video(input_path)
+    canvas_width = int(width) if width else probe_width
+    canvas_height = int(height) if height else probe_height
+    if canvas_width <= 0 or canvas_height <= 0:
+        raise PoemOverlayError("video dimensions must be positive")
+
+    scale = canvas_height / _REF_HEIGHT
+    cell = max(1, round(54 * scale))
+    calligraphy, serif = resolve_fonts(
+        calligraphy_font=calligraphy_font,
+        serif_font=serif_font,
+    )
+
+    # Normalise segments into (offset_s, [(text, global_start_s), ...]).
+    timed_segments: list[tuple[float, list[tuple[str, float]]]] = []
+    for seg in segments:
+        offset = float(seg.get("offset_s") or 0.0)
+        raw_lines = seg.get("lines") or []
+        lines: list[tuple[str, float]] = []
+        for entry in raw_lines:
+            if isinstance(entry, dict):
+                text = str(entry.get("text") or "").strip()
+                start = float(entry.get("start_s") or 0.0)
+            else:
+                text = str(entry[0]).strip()
+                start = float(entry[1])
+            if text:
+                lines.append((text, offset + start))
+        if lines:
+            timed_segments.append((offset, lines))
+    if not timed_segments:
+        raise PoemOverlayError("no poem lines to overlay across segments")
+
+    import tempfile
+
+    temp_root = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="poem-master-"))
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        inputs = ["-i", str(input_path)]
+        parts: list[str] = []
+        previous = "0:v"
+        next_input = 1
+
+        if show_title:
+            title_png = _build_title_card(
+                title=clean_title,
+                author=clean_author,
+                dynasty=str(dynasty or "唐"),
+                seal_text=seal_text or "狸",
+                calligraphy=calligraphy,
+                serif=serif,
+                scale=scale,
+                work_dir=temp_root,
+            )
+            title_in = 0.5
+            title_out = min(5.0, max(3.0, duration - 3.0)) if duration > 0 else 5.0
+            title_x = round(36 * scale)
+            title_y = round(84 * scale)
+            inputs += ["-framerate", "24", "-loop", "1", "-i", str(title_png)]
+            parts.append(
+                f"[{next_input}:v]format=rgba,"
+                f"fade=t=in:st={title_in}:d=0.8:alpha=1,"
+                f"fade=t=out:st={title_out}:d=0.8:alpha=1[ttl];"
+                f"[0:v][ttl]overlay={title_x}:{title_y}:"
+                f"enable='between(t,{title_in - 0.01},{title_out + 0.81})'[cv0]"
+            )
+            previous = "cv0"
+            next_input += 1
+
+        top_y = round(60 * scale)
+        step = round(66 * scale)
+        start_x = canvas_width - round(96 * scale)
+
+        # Build every column image first so the overlay loop stays simple.
+        col_paths: dict[tuple[int, int], Path] = {}
+        for seg_index, (_offset, lines) in enumerate(timed_segments):
+            for line_index, (text, _gstart) in enumerate(lines):
+                col_path, _ = _build_column(
+                    text,
+                    calligraphy=calligraphy,
+                    scale=scale,
+                    cell=cell,
+                    work_dir=temp_root,
+                    index=seg_index * 100 + line_index,
+                )
+                col_paths[(seg_index, line_index)] = col_path
+
+        # Per-segment time windows: each segment's columns and seal are visible
+        # only during [offset, segment_end) so a later segment can never overlap
+        # an earlier one. segment_end = next segment's offset (film end for the
+        # last). Columns lay out right-to-left within each segment.
+        seg_ends: list[float] = []
+        for i, (offset, _lines) in enumerate(timed_segments):
+            if i + 1 < len(timed_segments):
+                seg_ends.append(timed_segments[i + 1][0])
+            elif duration > 0:
+                seg_ends.append(duration)
+            else:
+                seg_ends.append(offset + 3.0)
+
+        overlay_index = 0
+        for seg_index, (_offset, lines) in enumerate(timed_segments):
+            seg_end = seg_ends[seg_index]
+            column_x = start_x
+            for line_index, (text, gstart) in enumerate(lines):
+                col_path = col_paths[(seg_index, line_index)]
+                fade_out = max(gstart + 1.0, seg_end - 0.4)
+                inputs += ["-framerate", "24", "-loop", "1", "-i", str(col_path)]
+                parts.append(
+                    f"[{next_input}:v]format=rgba,"
+                    f"fade=t=in:st={gstart:.2f}:d=0.6:alpha=1,"
+                    f"fade=t=out:st={fade_out:.2f}:d=0.8:alpha=1[c{overlay_index}];"
+                    f"[{previous}][c{overlay_index}]overlay={column_x}:{top_y}:"
+                    f"enable='between(t,{gstart - 0.01:.2f},{fade_out + 0.81:.2f})'"
+                    f"[cv{overlay_index + 1}]"
+                )
+                previous = f"cv{overlay_index + 1}"
+                next_input += 1
+                overlay_index += 1
+                column_x -= step
+
+            # This segment's seal, under its last column, visible to seg_end.
+            last_gstart = lines[-1][1]
+            seal_in = last_gstart + 2.2
+            if seal_in < seg_end - 0.2:
+                seal_path = _build_seal(
+                    seal_text=seal_text or "狸",
+                    calligraphy=calligraphy,
+                    scale=scale,
+                    work_dir=temp_root,
+                )
+                seal_fade_out = max(seal_in + 0.8, seg_end - 0.2)
+                last_col_x = column_x + step
+                last_col_height = len(lines[-1][0]) * cell + round(24 * scale)
+                seal_y = top_y + last_col_height + round(6 * scale)
+                inputs += ["-framerate", "24", "-loop", "1", "-i", str(seal_path)]
+                parts.append(
+                    f"[{next_input}:v]format=rgba,"
+                    f"fade=t=in:st={seal_in:.2f}:d=0.6:alpha=1,"
+                    f"fade=t=out:st={seal_fade_out:.2f}:d=0.8:alpha=1[sl{overlay_index}];"
+                    f"[{previous}][sl{overlay_index}]overlay={last_col_x}:{seal_y}:"
+                    f"enable='between(t,{seal_in - 0.01:.2f},{seal_fade_out + 0.81:.2f})'"
+                    f"[cv{overlay_index + 1}]"
+                )
+                previous = f"cv{overlay_index + 1}"
+                next_input += 1
+                overlay_index += 1
+
+        # Watermark burned across the whole film, bottom-right.
+        clean_watermark = str(watermark or "").strip()
+        if clean_watermark:
+            wm_file = temp_root / "watermark.txt"
+            wm_file.write_text(clean_watermark, encoding="utf-8")
+            wm_size = max(1, round(46 * scale))
+            margin = max(1, round(34 * scale))
+            parts.append(
+                f"[{previous}]drawtext=fontfile={serif}:textfile={wm_file}:"
+                f"fontsize={wm_size}:fontcolor=0x2b2620@0.85:borderw=2:"
+                f"bordercolor=0xfaf8f3@0.55:"
+                f"x=w-text_w-{margin}:y=h-text_h-{margin}[vw]"
+            )
+            previous = "vw"
+
+        # Audio: unified recitation replaces the whole track when provided.
+        audio_input_index: int | None = None
+        if recitation_audio is not None:
+            audio_input_index = next_input
+            inputs += ["-i", str(recitation_audio)]
+            pad_to = duration if duration > 0 else 3600.0
+            parts.append(
+                f"[{audio_input_index}:a:0]apad=whole_dur={pad_to}[arep]"
+            )
+
+        filter_complex = ";".join(parts)
+        command = ["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", filter_complex]
+        command += ["-map", f"[{previous}]"]
+        if audio_input_index is not None:
+            command += ["-map", "[arep]", "-c:a", "aac", "-b:a", "192k"]
+        elif has_audio:
+            command += ["-map", "0:a", "-c:a", "copy"]
+        if duration > 0:
+            command += ["-t", f"{duration:.3f}"]
+        command += [
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-profile:v",
+            "high",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        encode_timeout = max(300.0, duration * 60.0)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=encode_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PoemOverlayError(
+                f"ffmpeg master overlay timed out after {encode_timeout:.0f}s"
+            ) from exc
+        if result.returncode != 0:
+            raise PoemOverlayError(
+                f"ffmpeg master overlay failed: {result.stderr.strip()[-800:]}"
+            )
+    finally:
+        if work_dir is None:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+    total_lines = sum(len(lines) for _o, lines in timed_segments)
+    return {
+        "duration_s": duration,
+        "segment_count": len(timed_segments),
+        "line_count": total_lines,
+        "width": canvas_width,
+        "height": canvas_height,
+        "audio_replaced": recitation_audio is not None,
+        "title_shown": bool(show_title),
+        "watermark_shown": bool(clean_watermark),
     }

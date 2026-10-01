@@ -9,7 +9,11 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
 from ..config import settings
 from ..core.h3.frames import frames_for_seconds
-from ..core.h3.prompt import compose_h3_prompt, validate_h3_prompt
+from ..core.h3.prompt import (
+    compose_h3_prompt,
+    enforce_dialogue_occurrences_in_sections,
+    validate_h3_prompt,
+)
 from ..core.jobs import create_job, start_pipeline_job
 from ..core.library.images import resolve_asset_image
 from ..core.library.store import asset_dir, load_asset
@@ -308,9 +312,13 @@ async def submit_json_shot(
     ).strip():
         raise HTTPException(400, "MiniMax H3 API key is not configured")
 
+    global_direction = effective_global_prompt(project_id)
+    normalized_prompt = enforce_dialogue_occurrences_in_sections(
+        shot.prompt, shot.dialogue, exempt_text=global_direction
+    )
     prompt_text = ensure_global_prompt_in_h3(
-        compose_h3_prompt(shot.prompt),
-        effective_global_prompt(project_id),
+        compose_h3_prompt(normalized_prompt),
+        global_direction,
     )
     try:
         validate_h3_prompt(

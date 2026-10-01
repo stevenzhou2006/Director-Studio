@@ -1,6 +1,7 @@
 from app.core.h3.prompt import (
     validate_h3_prompt,
     compose_h3_prompt,
+    enforce_dialogue_occurrences_in_sections,
     ensure_audio_bindings_in_sections,
 )
 from app.core.projects.models import PromptSections
@@ -45,6 +46,52 @@ def test_ensure_audio_bindings_only_adds_missing_indexes():
     validate_h3_prompt(text, [], audio_count=2)
 
 
+def test_ensure_audio_bindings_forces_diegetic_lip_sync():
+    # A narrator/voice-over framing (tag present, no mouth-sync) must still get a
+    # diegetic lip-sync directive so the on-screen character visibly recites.
+    sections = _sections(
+        soundscape="a young girl's voice recites over the scene in <Audio 1>"
+    )
+    fixed = ensure_audio_bindings_in_sections(sections, [(1, "recitation")])
+    text = compose_h3_prompt(fixed)
+    assert "mouth" in text and "sync" in text
+    assert "NOT a disembodied narrator" in text
+    # the tag is not duplicated by the lip-sync clause
+    assert text.count("<Audio 1>") == 1
+
+
+def test_ensure_audio_bindings_skips_lip_sync_when_already_present():
+    sections = _sections(
+        soundscape="the cat's mouth moves in sync with <Audio 1>"
+    )
+    fixed = ensure_audio_bindings_in_sections(sections, [(1, "recitation")])
+    assert "disembodied" not in fixed.overall_soundscape
+
+
+def test_ensure_audio_bindings_forces_mouth_visibility_in_description():
+    # A mouth-hiding composition (high-angle into a basket, heads down) with no
+    # mouth cue in detailed_description must get a mouth-visibility directive
+    # injected into the conditioning payload, not just the soundscape.
+    sections = PromptSections(
+        subject_definitions="DALI and XIAOBAI at a basket",
+        summary="B",
+        retention_analysis="C",
+        detailed_description=(
+            "high angle looking down into a bamboo basket, the cats' heads "
+            "lowered peering into the beans"
+        ),
+        overall_soundscape="a young girl's voice recites in <Audio 1>",
+        non_diegetic_music="F",
+    )
+    fixed = ensure_audio_bindings_in_sections(sections, [(1, "recitation")])
+    dd = fixed.detailed_description.lower()
+    assert "mouth" in dd and "visible to camera" in dd
+    assert "do not use a top-down" in dd
+    # idempotent
+    again = ensure_audio_bindings_in_sections(fixed, [(1, "recitation")])
+    assert again.detailed_description == fixed.detailed_description
+
+
 def test_order_and_dialogue():
     sections = PromptSections(
         subject_definitions="A",
@@ -79,6 +126,99 @@ def test_duplicate_dialogue_lines_repeat_once_per_occurrence():
 
     with pytest.raises(ValueError, match="exactly once"):
         validate_h3_prompt(text, ["hahaha"])
+
+
+def _six(desc="D", soundscape="E"):
+    return PromptSections(
+        subject_definitions="A",
+        summary="B",
+        retention_analysis="C",
+        detailed_description=desc,
+        overall_soundscape=soundscape,
+        non_diegetic_music="F",
+    )
+
+
+def test_enforce_dialogue_removes_surplus_from_non_spoken_section():
+    # Shot 1 mirror: the LLM wrote the line in both detailed_description and
+    # overall_soundscape while the dialogue list has it once.
+    sections = _six(
+        desc="0-5s: dali recites '红豆生南国' to camera.",
+        soundscape="The voice delivers the line '红豆生南国' with a calm tone.",
+    )
+    fixed = enforce_dialogue_occurrences_in_sections(sections, ["红豆生南国"])
+    text = compose_h3_prompt(fixed)
+    assert text.count("红豆生南国") == 1
+    # the spoken occurrence in detailed_description is kept
+    assert "红豆生南国" in fixed.detailed_description
+    # the surplus mention in overall_soundscape is gone, prose stays grammatical
+    assert "红豆生南国" not in fixed.overall_soundscape
+    validate_h3_prompt(text, ["红豆生南国"])
+
+
+def test_enforce_dialogue_is_idempotent():
+    sections = _six(
+        desc="dali recites '红豆生南国' to camera.",
+        soundscape="The voice delivers the line '红豆生南国' calmly.",
+    )
+    once = enforce_dialogue_occurrences_in_sections(sections, ["红豆生南国"])
+    twice = enforce_dialogue_occurrences_in_sections(once, ["红豆生南国"])
+    assert once.overall_soundscape == twice.overall_soundscape
+    assert compose_h3_prompt(twice).count("红豆生南国") == 1
+
+
+def test_enforce_dialogue_adds_missing_occurrence():
+    sections = _six(desc="dali looks at the tree.", soundscape="Quiet ambience.")
+    fixed = enforce_dialogue_occurrences_in_sections(sections, ["红豆生南国"])
+    text = compose_h3_prompt(fixed)
+    assert text.count("红豆生南国") == 1
+    assert "红豆生南国" in fixed.detailed_description
+    validate_h3_prompt(text, ["红豆生南国"])
+
+
+def test_enforce_dialogue_chorus_trims_extra_copy():
+    sections = _six(
+        desc="dali laughs hahaha, xiaobai laughs hahaha, then a third hahaha.",
+    )
+    fixed = enforce_dialogue_occurrences_in_sections(
+        sections, ["hahaha", "hahaha"]
+    )
+    text = compose_h3_prompt(fixed)
+    assert text.count("hahaha") == 2
+    validate_h3_prompt(text, ["hahaha", "hahaha"])
+
+
+def test_enforce_dialogue_keeps_exempt_direction_verbatim():
+    direction = "GLOBAL DIRECTION: only two cats. The line 红豆生南国 is the theme."
+    sections = PromptSections(
+        subject_definitions=direction,
+        summary="B",
+        retention_analysis="C",
+        detailed_description="dali recites '红豆生南国' to camera.",
+        overall_soundscape="Quiet ambience.",
+        non_diegetic_music="F",
+    )
+    fixed = enforce_dialogue_occurrences_in_sections(
+        sections, ["红豆生南国"], exempt_text=direction
+    )
+    # the GLOBAL DIRECTION copy is untouched
+    assert direction in fixed.subject_definitions
+    # the surplus spoken copy is removed so the total matches the single dialogue
+    text = compose_h3_prompt(fixed)
+    assert text.count("红豆生南国") == 1
+    assert "红豆生南国" not in fixed.detailed_description
+    validate_h3_prompt(text, ["红豆生南国"])
+
+
+def test_enforce_dialogue_noop_when_already_matching():
+    sections = _six(desc="dali recites '红豆生南国' to camera.")
+    fixed = enforce_dialogue_occurrences_in_sections(sections, ["红豆生南国"])
+    assert fixed == sections
+
+
+def test_enforce_dialogue_ignores_empty_dialogue():
+    sections = _six()
+    assert enforce_dialogue_occurrences_in_sections(sections, []) == sections
 
 
 def test_audio_tags_must_reference_submitted_audio_but_may_repeat():

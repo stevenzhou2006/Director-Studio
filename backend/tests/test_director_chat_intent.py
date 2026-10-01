@@ -204,9 +204,9 @@ def test_actor_design_intent_offers_only_the_actor_generation_tool(
         current_message="用 GPT 生成人物设定，四十岁的女侦探，黑色风衣",
     )
 
-    assert [item["function"]["name"] for item in tools] == [
-        "queue_actor_design"
-    ]
+    names = [item["function"]["name"] for item in tools]
+    assert "queue_actor_design" in names
+    assert set(names) <= {"queue_actor_design", "web_search"}
 
 
 def test_follow_existing_character_setting_keeps_gpt_layout_tools_available(

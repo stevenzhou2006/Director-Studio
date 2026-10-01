@@ -16,6 +16,7 @@ from ...config import settings
 from ...core.jobs import create_job, load_job, start_pipeline_job
 from ...core.library.store import load_asset, write_asset
 from ...core.h3.prompt import (
+    enforce_dialogue_occurrences_in_sections,
     ensure_audio_bindings_in_sections,
     validate_required_picture_bindings,
     validate_tail_frame_transition_prompt,
@@ -272,6 +273,61 @@ def _same_storyboard_definition(left: Shot, right: Shot) -> bool:
         and picture_ref_signature(left.refs) == picture_ref_signature(right.refs)
         and voice_ref_signature(left.voice_refs) == voice_ref_signature(right.voice_refs)
     )
+
+
+def _non_layout_picture_set(refs: list[ShotRef]) -> set[tuple[str, str, str]]:
+    return {
+        (ref.role.value, ref.asset_id, ref.file_key or "")
+        for ref in refs
+        if ref.role != RefRole.layout_ref_frame
+    }
+
+
+def _inherit_existing_bindings(
+    candidate: Shot,
+    existing: Shot,
+    draft: ShotDraft,
+) -> Shot:
+    """Keep generated bindings when a re-saved draft does not restate them.
+
+    A draft that omits ``voice_matches`` for an existing Shot whose dialogue is
+    unchanged inherits that Shot's current voice bindings instead of silently
+    unbinding an approved recitation. Likewise, when the Picture cast is
+    unchanged, the existing Layout reference binding is carried over because
+    Layouts are never authored through ``save_storyboard``.
+    """
+    updates: dict[str, Any] = {}
+    if (
+        not draft.voice_matches
+        and existing.voice_refs
+        and list(candidate.dialogue) == list(existing.dialogue)
+    ):
+        updates["voice_refs"] = list(existing.voice_refs)
+    existing_layouts = [
+        ref for ref in existing.refs if ref.role == RefRole.layout_ref_frame
+    ]
+    if (
+        existing_layouts
+        and _non_layout_picture_set(candidate.refs)
+        == _non_layout_picture_set(existing.refs)
+    ):
+        merged = list(candidate.refs)
+        used = {ref.picture_index for ref in merged}
+        for layout_ref in existing_layouts:
+            if any(
+                ref.role == RefRole.layout_ref_frame
+                and ref.asset_id == layout_ref.asset_id
+                for ref in merged
+            ):
+                continue
+            picture = layout_ref.picture_index
+            if picture in used:
+                picture = max(used, default=0) + 1
+            merged.append(layout_ref.model_copy(update={"picture_index": picture}))
+            used.add(picture)
+        if len(merged) != len(candidate.refs):
+            updates["refs"] = merged
+    return candidate.model_copy(update=updates) if updates else candidate
 
 _KIND_TO_MATCH_ROLE = {
     "actors": "actor",
@@ -1049,7 +1105,11 @@ class DirectorService:
                 if _same_storyboard_definition(existing, candidate):
                     candidate = existing
                 else:
-                    candidate = candidate.model_copy(update={"id": existing.id})
+                    inherited = _inherit_existing_bindings(candidate, existing, draft)
+                    if _same_storyboard_definition(existing, inherited):
+                        candidate = existing
+                    else:
+                        candidate = inherited.model_copy(update={"id": existing.id})
             shots.append(candidate)
         if prior_continuity is not None:
             pinned: list[Shot] = []
@@ -2961,6 +3021,11 @@ class DirectorService:
                             for vr in prompt_voice_refs
                         ],
                     )
+                parsed = enforce_dialogue_occurrences_in_sections(
+                    parsed,
+                    shot.dialogue,
+                    exempt_text=global_prompt,
+                )
                 ordered_text = parsed.as_ordered_text()
                 validate_tail_frame_transition_prompt(parsed, selected_layouts)
                 validate_required_picture_bindings(

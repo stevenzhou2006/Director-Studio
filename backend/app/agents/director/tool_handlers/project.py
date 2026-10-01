@@ -97,6 +97,25 @@ async def handle_project_tool(
             )
         return True
 
+    if name == "set_watermark":
+        watermark = str(args.get("watermark") or "").strip()
+        save_project(project.model_copy(update={"watermark": watermark}))
+        actions.append("set_watermark")
+        if result_payloads is not None:
+            result_payloads.append({"ok": True, "watermark": watermark})
+        if watermark:
+            notes.append(
+                f"Set the project watermark to {watermark}. It is burned into "
+                "the bottom-right corner of the finished master exactly once "
+                "at master-level finishing; individual shots are not touched."
+            )
+        else:
+            notes.append(
+                "Cleared the project watermark; the finished master will carry "
+                "no brand mark."
+            )
+        return True
+
     if name == "review_asset_coverage":
         from ....core.projects.models import AssetCoverageReviewSubmission
 

@@ -208,6 +208,10 @@ class Project(BaseModel):
     # only when the user explicitly requests one. Never derived from script prose.
     # Empty means the imported scene assets are the style authority.
     style_lock: str = ""
+    # Brand watermark burned into the bottom-right corner of the finished
+    # master (e.g. "@大狸小白"). Applied once at master-level finishing, not
+    # per shot. Empty means no watermark.
+    watermark: str = ""
     created_at: str
     updated_at: str
     shot_ids: list[str] = Field(default_factory=list)

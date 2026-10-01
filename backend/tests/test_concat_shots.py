@@ -279,7 +279,7 @@ def test_concat_tool_is_offered_to_the_model():
         if tool["function"]["name"] == "concatenate_shots"
     )
     props = tool["function"]["parameters"]["properties"]
-    assert set(props) == {"output_name", "output_kind", "reencode"}
+    assert set(props) == {"output_name", "output_kind", "reencode", "apply_finish"}
     assert tool["function"]["parameters"]["additionalProperties"] is False
 
 

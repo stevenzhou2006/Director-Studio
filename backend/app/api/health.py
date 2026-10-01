@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from ..core.code_version import stale_files
 from ..core.comfy import ComfyClient
 from ..core.llm import get_llm_provider
 from ..core.schemas import HealthResponse
@@ -24,6 +25,7 @@ async def health() -> HealthResponse:
     except Exception:
         llm_reachable = False
 
+    stale = stale_files()
     return HealthResponse(
         ok=True,
         comfy_reachable=comfy_ok,
@@ -35,4 +37,6 @@ async def health() -> HealthResponse:
                 "reachable": llm_reachable,
             },
         },
+        stale_code=bool(stale),
+        stale_files=stale,
     )

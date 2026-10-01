@@ -28,17 +28,38 @@ not count speaker labels, punctuation, action prose, or shot notes.
 - Under 24 spoken units with only simple action is an under-fill: do not assign it
   its own clip — merge it into a neighbour first (see the split rule).
 
-## Shot density per duration
+## Shot density per duration — fewer, longer shots by default
 
-| Target duration | Shots |
-|---|---:|
-| 10s | 2–3 |
-| 12s | 3–4 |
-| 15s | 3–5 |
+| Target duration | Shots (default) | Max |
+|---|---:|---:|
+| 10s | 1–2 | 3 |
+| 12s | 1–2 | 4 |
+| 15s | 1–2 | 5 |
+
+**Minimum-shot principle:** the default is the FEWEST shots that can hold the
+content. Every extra shot multiplies the whole chain (reference frame, H3 render,
+recitation, finishing) and every cross-shot seam is a place identity, style,
+lighting, and voice can drift. A 15s film that fits in one continuous H3 take
+should be ONE shot. Split only on a hard boundary (see below), never by habit.
+
+**Anti-pattern — one line per shot:** do not map each poem line / each sentence /
+each beat to its own clip. A 4-line poem is NOT 4 shots. That pattern turns one
+global fix (title card, font, accent, watermark) into N fixes and makes the first
+shot structurally different from the rest. Group lines into couplets or a single
+take.
 
 One clip carries one action chain: a start, a response, and a result. Fit one
 medium action, or two small linked actions — never a wardrobe change plus a long
 walk plus a prop pickup plus a long exchange in a single clip.
+
+## Poem recitation shot plan
+
+For a classical poem recitation film, default to **one shot per couplet** (two
+lines, ~7–8s) or a **single take** for the whole short poem when it fits in 15s.
+A 4-line 七言/五言绝句 → 2 couplet shots (or 1 take). The title card, the poem
+columns, the unified recitation, and the watermark are applied ONCE at
+master-level finishing over the joined film — so shot count is a pure creative
+choice and never a fix-cost multiplier.
 
 ## One unit, one change
 

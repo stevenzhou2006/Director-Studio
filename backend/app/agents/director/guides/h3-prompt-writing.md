@@ -41,6 +41,34 @@ Audio labels (`<Audio N>`) use exactly one of:
 
 Pick each marker only within the role already assigned to that label in `subject_definitions`; do not treat newly added action, background, or story events as a loss of reference fidelity. A Director poem shot that binds a recitation voice typically reads `<Audio 1>: reference - the recitation follows <Audio 1>'s timbre and measured delivery without copying the original signal.`, and a Layout that locks the courtyard reads `<Picture 3> (courtyard geography and light): fully_preserved - the same plate, landmarks, and light direction carry through the whole clip.`
 
+## Recitation is on-screen speech with lip-sync
+
+A shot with a poem recitation or dialogue is the ON-SCREEN character speaking, not a
+narrator. The reciting character (for the cat-poet series, DALI) must be shown actually
+vocalizing: mouth, jaw, lips, and breath moving in sync with `<Audio N>` and the words.
+
+- In `subject_definitions`, bind the voice to the speaking character as their own voice,
+  e.g. `DALI recites the poem in <Audio 1>; his mouth and jaw move in sync with the
+  recitation.` Do NOT write it as a separate off-screen teller ("a young girl's voice
+  recites over the scene", "narration", "voice-over").
+- In `detailed_description`, describe the speaking beat concretely and time it to the
+  audio: which character speaks, when their mouth opens/closes, head/eye posture while
+  reciting, and that the movement tracks `<Audio N>`'s delivery.
+- The voice's timbre (child, dialect, stylized) belongs to the on-screen speaker. A
+  closed or unmoving mouth on a shot that carries a recitation is a defect — the cat must
+  visibly be the one reciting.
+- The non-speaking character still reacts (see reaction rule), but only the named speaker
+  has synced mouth movement.
+- **Mouth visibility is mandatory.** The speaker's face and mouth must be in clear view of
+  the camera (front or three-quarter/profile) for the whole spoken line. Do NOT pick a
+  composition that hides the mouth during the recitation: no top-down / high-angle-into-a-
+  basket-or-object view, no head lowered or turned away, no muzzle buried in food/prop, no
+  back-of-head framing while the line is spoken. If the action has the cat looking down or
+  handling a prop, have it lift its head to face the camera to recite, and place the
+  down-look/prop business before or after the spoken line. A recitation with the speaker's
+  mouth hidden cannot lip-sync — this is the single most common cause of a "not lip-synced"
+  shot.
+
 ## Describe, do not summarize
 
 `detailed_description` is the conditioning payload, not a synopsis. For each shot state, make it explicit and observable: composition and framing, each subject's appearance and position, environment and lighting, the action and any state change, camera movement (type, amplitude, speed when it matters), the sound present in the moment, and exactly where each referenced `<Picture N>` / `<Audio N>` takes effect. Avoid reducing it to a plot summary or a list of reference relationships.

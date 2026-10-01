@@ -376,6 +376,14 @@ POEM_OVERLAY_TOOL = function_tool(
                 "additionalProperties": False,
             },
         },
+        "show_title": {
+            "type": "boolean",
+            "description": (
+                "Burn the 《title》 dynasty · author card. Omit to follow the "
+                "first-poem-shot rule (title only on the first shot that "
+                "carries poem title/author, so it appears once per film)."
+            ),
+        },
         "output_name": {"type": "string"},
         "width": {"type": "integer"},
         "height": {"type": "integer"},
@@ -495,7 +503,12 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "Persist the exact complete ordered storyboard you authored for the "
                 "current screenplay. Use PROJECT_STATE.script_hash. Preserve every "
                 "existing Shot's PROJECT_STATE id in shot_id, and omit shot_id only "
-                "for a genuinely new Shot."
+                "for a genuinely new Shot. Bind each spoken line with voice_matches "
+                "(asset_id + audio_index; omit file_key and the asset's H3-ready "
+                "take auto-resolves) so H3 lip-syncs against <Audio N>. Never put "
+                "Layout references in asset_matches: existing Layout and voice "
+                "bindings are preserved automatically when the draft restates the "
+                "same Pictures and dialogue."
             ),
             "parameters": StoryboardSubmission.model_json_schema(),
         },
@@ -615,7 +628,12 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "into one video file on the host running Director Studio. Use after "
             "every Shot has a succeeded H3 clip; it resolves each Shot's newest "
             "succeeded clip automatically. Tries a fast stream copy and falls "
-            "back to a full re-encode. The result includes the absolute output "
+            "back to a full re-encode. For poem projects this also applies "
+            "master-level finishing in the same call: the title card burned in "
+            "exactly once at the head of the film, every poem column timed on "
+            "the master timeline, the unified recitation audio replacing the "
+            "per-shot H3 tracks, and the project watermark burned bottom-right "
+            "across the whole film. The result includes the absolute output "
             "path to report to the user."
         ),
         {
@@ -639,6 +657,14 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "default": False,
                 "description": (
                     "Force a full filter re-encode instead of a stream copy."
+                ),
+            },
+            "apply_finish": {
+                "type": "boolean",
+                "description": (
+                    "Apply master-level poem finishing. Omit to auto-detect: "
+                    "on when every shot carries poem title/author/lines. Pass "
+                    "false to produce a plain concat with no overlays."
                 ),
             },
         },
@@ -732,6 +758,25 @@ DIRECTOR_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
         required=["style"],
+    ),
+    function_tool(
+        "set_watermark",
+        (
+            "Set the brand watermark string burned into the bottom-right corner "
+            "of the finished master film (e.g. \"@大狸小白\"). Call this when "
+            "the user asks for a watermark/署名/品牌标识 on the video. It is "
+            "applied ONCE at master-level finishing over the whole film, never "
+            "per shot. Pass an empty string to clear it."
+        ),
+        {
+            "watermark": {
+                "type": "string",
+                "description": (
+                    "The watermark text (e.g. \"@大狸小白\"); empty to clear."
+                ),
+            },
+        },
+        required=["watermark"],
     ),
     function_tool(
         "qc_layout",

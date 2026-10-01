@@ -96,6 +96,7 @@ def concatenate_project_shots(
                 "generation": clip.source_generation,
                 "output_kind": clip.output_kind,
                 "source_path": str(clip.path.resolve()),
+                "duration_s": _probe_duration(clip.path) or 0.0,
             }
             for shot_id, title, clip in resolved
         ],

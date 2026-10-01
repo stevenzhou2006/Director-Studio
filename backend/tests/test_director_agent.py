@@ -11,7 +11,12 @@ import pytest
 
 from app.config import settings
 from app.core.projects import LayoutBrief, LayoutSourceRef, RefRole
-from app.core.projects.models import AgentContext, PromptSections, ShotStatus
+from app.core.projects.models import (
+    AgentContext,
+    PromptSections,
+    ShotRef,
+    ShotStatus,
+)
 from app.core.projects.store import (
     create_project,
     list_shots,
@@ -918,6 +923,172 @@ async def test_save_storyboard_adds_one_shot_without_recreating_existing_shots(
     assert saved[0].h3_job_id == "job_existing_h3"
     assert saved[0].prompt_sections.subject_definitions == "Existing prompt must survive."
     assert saved[1].id != original.id
+
+
+def _seed_tts_voice_asset(library_root: Path, asset_id: str) -> LibraryAsset:
+    adir = library_root / "voices" / asset_id
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "audio.flac").write_bytes(b"RIFF-audio")
+    (adir / "audio_padded.flac").write_bytes(b"RIFF-padded")
+    asset = LibraryAsset(
+        id=asset_id,
+        kind="voices",
+        name=f"TTS {asset_id}",
+        notes="generated recitation",
+        pipeline_id="tts",
+        job_id="job_tts",
+        created_at="2026-09-27T00:00:00+00:00",
+        files={"audio": "audio.flac", "audio_padded": "audio_padded.flac"},
+        meta={"duration_s": 6.9, "h3_ready": True, "h3_file_key": "audio_padded"},
+    )
+    (adir / "asset.json").write_text(
+        asset.model_dump_json(indent=2), encoding="utf-8"
+    )
+    return asset
+
+
+@pytest.mark.asyncio
+async def test_save_storyboard_binds_existing_tts_voice_without_file_key(director_dirs):
+    """An approved H3-ready recitation binds with just asset_id + audio_index."""
+    from app.agents.director.planner import ShotDraft
+    from app.agents.director.service import DirectorService, _script_hash
+
+    actor = _seed_actor_asset(director_dirs["library"])
+    scene = _seed_scene_asset(director_dirs["library"])
+    _seed_tts_voice_asset(director_dirs["library"], "voi_recite")
+    project = create_project("Poem bind", "红豆生南国，春来发几枝。")
+    provider = FakePlanProvider(
+        response=json.dumps({"valid": True, "issues": []})
+    )
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+    draft = ShotDraft.model_validate(
+        {
+            **CAMERA_DRAFT,
+            "scene_id": "sc01",
+            "title": "Couplet 1",
+            "script_beat": "recitation of the first couplet",
+            "duration_s": 7.0,
+            "dialogue": ["红豆生南国，春来发几枝。"],
+            "asset_matches": [
+                {
+                    "role": "actor",
+                    "asset_id": actor.id,
+                    "file_key": "master",
+                    "picture_index": 1,
+                },
+                {
+                    "role": "scene",
+                    "asset_id": scene.id,
+                    "file_key": "master",
+                    "picture_index": 2,
+                },
+            ],
+            "voice_matches": [
+                {"asset_id": "voi_recite", "audio_index": 1, "speaker": "reciter"}
+            ],
+        }
+    )
+
+    saved = await svc.save_storyboard(
+        project.id, [draft], _script_hash(project.script_text)
+    )
+
+    assert len(saved[0].voice_refs) == 1
+    assert saved[0].voice_refs[0].asset_id == "voi_recite"
+    assert saved[0].voice_refs[0].audio_index == 1
+    assert saved[0].voice_refs[0].file_key == "audio_padded"
+
+
+@pytest.mark.asyncio
+async def test_save_storyboard_rewithout_voice_matches_preserves_bindings(director_dirs):
+    """Re-saving without restating voice or Layout bindings never drops them."""
+    from app.agents.director.planner import ShotDraft
+    from app.agents.director.service import DirectorService, _script_hash
+    from app.core.projects.models import ShotVoiceRef
+
+    actor = _seed_actor_asset(director_dirs["library"])
+    scene = _seed_scene_asset(director_dirs["library"])
+    _seed_tts_voice_asset(director_dirs["library"], "voi_recite")
+    _seed_layout_source_asset(
+        director_dirs["library"],
+        kind="layouts",
+        asset_id="lay_poem",
+        name="Poem layout",
+        file_key="layout",
+    )
+    project = create_project("Preserve bindings", "红豆生南国，春来发几枝。")
+    provider = FakePlanProvider(
+        responses=[
+            json.dumps({"valid": True, "issues": []}),
+            json.dumps({"valid": True, "issues": []}),
+        ]
+    )
+    svc = DirectorService(
+        plan_provider=provider,
+        orchestrator=RecordingOrchestrator(),
+    )
+    draft = ShotDraft.model_validate(
+        {
+            **CAMERA_DRAFT,
+            "scene_id": "sc01",
+            "title": "Couplet 1",
+            "script_beat": "recitation of the first couplet",
+            "duration_s": 7.0,
+            "dialogue": ["红豆生南国，春来发几枝。"],
+            "asset_matches": [
+                {
+                    "role": "actor",
+                    "asset_id": actor.id,
+                    "file_key": "master",
+                    "picture_index": 1,
+                },
+                {
+                    "role": "scene",
+                    "asset_id": scene.id,
+                    "file_key": "master",
+                    "picture_index": 2,
+                },
+            ],
+            "voice_matches": [{"asset_id": "voi_recite", "audio_index": 1}],
+        }
+    )
+    initial = await svc.save_storyboard(
+        project.id, [draft], _script_hash(project.script_text)
+    )
+    with_layout = initial[0].model_copy(
+        update={
+            "refs": [
+                *initial[0].refs,
+                ShotRef(
+                    role=RefRole.layout_ref_frame,
+                    asset_id="lay_poem",
+                    picture_index=3,
+                    file_key="layout",
+                ),
+            ]
+        }
+    )
+    save_shot(with_layout)
+
+    # Re-save the same story without restating the voice or the Layout ref.
+    resave = draft.model_copy(update={"shot_id": with_layout.id, "voice_matches": []})
+    saved = await svc.save_storyboard(
+        project.id, [resave], _script_hash(project.script_text)
+    )
+
+    assert saved[0].id == with_layout.id
+    assert [
+        (ref.asset_id, ref.audio_index, ref.file_key) for ref in saved[0].voice_refs
+    ] == [("voi_recite", 1, "audio_padded")]
+    assert [
+        (ref.role.value, ref.asset_id, ref.picture_index)
+        for ref in saved[0].refs
+        if ref.role == RefRole.layout_ref_frame
+    ] == [("layout_ref_frame", "lay_poem", 3)]
+    assert saved[0].prompt_sections == with_layout.prompt_sections
 
 
 @pytest.mark.asyncio

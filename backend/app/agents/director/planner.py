@@ -42,10 +42,20 @@ class PlanProvider(Protocol):
 class AssetMatchDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: str
+    role: str = Field(
+        description=(
+            "One of actor, costume, scene, prop, other. Do not submit "
+            "'layout'/'layout_ref_frame' here: Layout bindings are managed by "
+            "the Layout pipeline and are preserved automatically on re-save."
+        )
+    )
     asset_id: str
     file_key: str | None = None
     picture_index: int | None = Field(default=None, ge=1, le=9)
+    notes: str = Field(
+        default="",
+        description="Optional prose recorded on the resulting Shot reference.",
+    )
 
     @field_validator("role")
     @classmethod
@@ -65,23 +75,42 @@ class AssetMatchDraft(BaseModel):
 
 
 class VoiceMatchDraft(BaseModel):
-    asset_id: str
-    audio_index: int = Field(ge=1, le=3)
-    file_key: str = "reference"
+    asset_id: str = Field(
+        description=(
+            "H3-ready voices asset id to bind as <Audio N> so the Shot "
+            "lip-syncs against this recitation."
+        )
+    )
+    audio_index: int = Field(
+        ge=1, le=3, description="Connection order: 1 becomes <Audio 1>."
+    )
+    file_key: str | None = Field(
+        default=None,
+        description=(
+            "Optional take key. Omit it to auto-resolve the asset's H3-ready "
+            "take (meta.h3_file_key, then audio_padded, audio, reference). "
+            "The literal 'reference' exists only on externally imported "
+            "voices, never on generated TTS takes."
+        ),
+    )
     speaker: str = ""
     reason: str = ""
 
-    @field_validator("asset_id", "file_key", "speaker", "reason")
+    @field_validator("asset_id", "speaker", "reason")
     @classmethod
     def _strip_text(cls, value: str) -> str:
         return (value or "").strip()
+
+    @field_validator("file_key")
+    @classmethod
+    def _strip_file_key(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def _require_identity(self) -> "VoiceMatchDraft":
         if not self.asset_id:
             raise ValueError("voice asset_id is required")
-        if not self.file_key:
-            raise ValueError("voice file_key is required")
         return self
 
 
@@ -117,7 +146,16 @@ class ShotDraft(BaseModel):
     duration_s: float = 8.0
     dialogue: list[str] = Field(default_factory=list)
     asset_matches: list[AssetMatchDraft] = Field(default_factory=list)
-    voice_matches: list[VoiceMatchDraft] = Field(default_factory=list)
+    voice_matches: list[VoiceMatchDraft] = Field(
+        default_factory=list,
+        description=(
+            "Bind H3-ready recitation/voice assets so the Shot lip-syncs "
+            "against <Audio N>. Every Shot with spoken dialogue must bind "
+            "its voice here (or via generate_tts_audio) before H3 renders. "
+            "Omitting this list on an existing Shot preserves its current "
+            "voice binding when the dialogue is unchanged."
+        ),
+    )
 
     @field_validator(
         "shot_id",

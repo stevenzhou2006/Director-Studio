@@ -485,6 +485,14 @@ async def _handle_overlay(
         raise ValueError("the source video is empty")
 
     output_name = str(args.get("output_name") or "").strip() or f"poem_{title}"
+    if "show_title" in args and args.get("show_title") is not None:
+        show_title = bool(args["show_title"])
+    elif source_shot is not None:
+        from ....core.jobs.poem_finalize import is_first_poem_shot
+
+        show_title = is_first_poem_shot(project_id, source_shot.id)
+    else:
+        show_title = True
     params: dict[str, Any] = {
         "title": title,
         "author": author,
@@ -493,6 +501,7 @@ async def _handle_overlay(
         "lines": lines,
         "output_name": output_name,
         "project_id": project_id,
+        "show_title": show_title,
     }
     for key in ("width", "height"):
         if args.get(key) is not None:

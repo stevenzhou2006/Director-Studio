@@ -89,17 +89,47 @@ def _heuristic_match(
             blocked.append(
                 f"invalid file_key {requested_key!r} for asset {asset_id}"
             )
+        cast_note = "llm-cast" if match.asset_id == asset_id else "llm-cast-fallback"
         _append_ref(
             refs,
             role=ref_role,
             asset_id=asset_id,
             index=index,
-            notes="llm-cast" if match.asset_id == asset_id else "llm-cast-fallback",
+            notes=f"{cast_note}; {match.notes}" if match.notes else cast_note,
             file_key=requested_key,
             picture_index=match.picture_index,
         )
 
     return refs, blocked
+
+
+VOICE_TAKE_PRIORITY = ("audio_padded", "audio", "reference")
+
+
+def _resolve_voice_file_key(asset: LibraryAsset, requested: str | None) -> str | None:
+    """Resolve the usable take key for a voice asset.
+
+    An explicit key is honored only when the asset actually carries it. When
+    omitted, the asset's H3-ready take is auto-selected (``meta.h3_file_key``,
+    then ``audio_padded``/``audio``/``reference``) so generated TTS voices —
+    which never store a ``reference`` key — can be bound without knowing the
+    internal file layout.
+    """
+    files = asset.files or {}
+    if requested:
+        return requested if files.get(requested) else None
+    h3_key = str((asset.meta or {}).get("h3_file_key") or "").strip()
+    if h3_key and files.get(h3_key):
+        return h3_key
+    for key in VOICE_TAKE_PRIORITY:
+        if files.get(key):
+            return key
+    return None
+
+
+def _available_voice_keys(asset: LibraryAsset) -> str:
+    keys = sorted(k for k, v in (asset.files or {}).items() if v)
+    return ", ".join(keys) if keys else "none"
 
 
 def _resolve_voice_matches(
@@ -119,13 +149,14 @@ def _resolve_voice_matches(
         asset = index.get(match.asset_id)
         if asset is None or asset.kind != "voices":
             continue
-        if not (asset.files or {}).get(match.file_key):
+        file_key = _resolve_voice_file_key(asset, match.file_key)
+        if not file_key:
             continue
         resolved.append(
             ShotVoiceRef(
                 asset_id=match.asset_id,
                 audio_index=match.audio_index,
-                file_key=match.file_key,
+                file_key=file_key,
                 speaker=match.speaker,
                 notes=match.reason,
             )
@@ -388,9 +419,16 @@ def _validate_storyboard_bindings(
         seen: set[tuple[str, str, str]] = set()
         for match in draft.asset_matches:
             role = role_to_ref_role(match.role)
-            if role is None or role == RefRole.layout_ref_frame:
+            if role == RefRole.layout_ref_frame:
+                # Layout bindings are produced and managed by the Layout
+                # pipeline, never authored here. An Agent echoing the
+                # PROJECT_STATE layout ref is a no-op; the existing Shot's
+                # Layout binding is preserved at save time.
+                continue
+            if role is None:
                 raise ValueError(
-                    f"shot {shot_index} has invalid asset role {match.role!r}"
+                    f"shot {shot_index} has invalid asset role {match.role!r}; "
+                    "use actor, costume, scene, prop, or other"
                 )
             asset = index.get(match.asset_id)
             if match.asset_id not in available or asset is None:
@@ -438,10 +476,13 @@ def _validate_storyboard_bindings(
                     f"shot {shot_index} references unknown or non-H3-ready voice asset "
                     f"{match.asset_id!r}"
                 )
-            if not (asset.files or {}).get(match.file_key):
+            resolved_key = _resolve_voice_file_key(asset, match.file_key)
+            if resolved_key is None:
                 raise ValueError(
                     f"shot {shot_index} has invalid voice file_key "
-                    f"{match.file_key!r} for asset {match.asset_id}"
+                    f"{match.file_key!r} for asset {match.asset_id}; "
+                    f"available takes: {_available_voice_keys(asset)}. "
+                    "Omit file_key to auto-bind the H3-ready take."
                 )
 
 

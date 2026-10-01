@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterable
 
 from app.core.projects.models import PromptSections
@@ -138,18 +139,157 @@ def ensure_audio_bindings_in_sections(
         return sections
     text = sections.as_ordered_text()
     missing = [(idx, label) for idx, label in bindings if f"<Audio {idx}>" not in text]
-    if not missing:
+    # A diegetic lip-sync directive must be present whenever a voice is bound, even
+    # if the writer already referenced <Audio N> as a narrator/voice-over. Without
+    # this the model renders a closed, unmoving mouth over the recitation.
+    has_lip_sync = "mouth" in text and "sync" in text
+    # The mouth cue must also live in detailed_description (the conditioning
+    # payload), not only the soundscape: a mouth-hiding composition (top-down into
+    # an object, head lowered away from camera) will otherwise defeat lip-sync even
+    # when the soundscape says the mouth moves.
+    dd_has_mouth = "mouth" in (sections.detailed_description or "").lower()
+    if not missing and has_lip_sync and dd_has_mouth:
         return sections
-    clauses = [
+    update: dict[str, str] = {}
+    clauses: list[str] = [
         f"The voice/recitation in <Audio {idx}> ({label}) is the authoritative "
-        "vocal performance for this shot; sync the on-screen mouth movement, "
-        "breath, and delivery timing to it."
+        "vocal performance for this shot."
         for idx, label in missing
     ]
-    base = (sections.overall_soundscape or "").strip()
-    addition = " ".join(clauses)
-    merged = f"{base} {addition}".strip() if base else addition
-    return sections.model_copy(update={"overall_soundscape": merged})
+    if not has_lip_sync:
+        clauses.append(
+            "The recitation audio bound to this shot is spoken aloud by the "
+            "on-screen character who is reciting — NOT a disembodied narrator "
+            "or voice-over. Their mouth, jaw, lips, and breath move visibly in "
+            "sync with the words and the delivery timing of the audio; a closed "
+            "or unmoving mouth over this recitation is a defect."
+        )
+    if clauses:
+        base = (sections.overall_soundscape or "").strip()
+        addition = " ".join(clauses)
+        update["overall_soundscape"] = f"{base} {addition}".strip() if base else addition
+    if not dd_has_mouth:
+        dd = (sections.detailed_description or "").strip()
+        cue = (
+            "Throughout the recitation the speaking on-screen character's face "
+            "and mouth stay visible to camera and their lips, jaw, and mouth move "
+            "continuously in sync with the audio; the framing must not hide the "
+            "speaker's mouth — do not use a top-down or head-lowered-away "
+            "composition while the line is spoken, and keep the mouth region in "
+            "clear view."
+        )
+        update["detailed_description"] = f"{dd} {cue}".strip() if dd else cue
+    if not update:
+        return sections
+    return sections.model_copy(update=update)
+
+
+# Quote pairs whose contents are treated as a removable spoken/mentioned span.
+_QUOTE_PAIRS: tuple[tuple[str, str], ...] = (
+    ("'", "'"),
+    ('"', '"'),
+    ("\u201c", "\u201d"),
+    ("\u300c", "\u300d"),
+    ("\u300e", "\u300f"),
+)
+# Neutral, non-matching stand-ins used when a surplus copy must be removed.
+_FALLBACK_REFERENCE = "the recited line"
+_BLANK_FILLER = "Ambient sound only."
+# Section that carries the authoritative spoken action; kept first.
+_SPOKEN_SECTION = "detailed_description"
+
+
+def _remove_one_surplus(text: str, line: str) -> str:
+    """Remove one occurrence of ``line`` from ``text``.
+
+    Prefers deleting a quoted span (quotes included) so the surrounding prose
+    stays grammatical; otherwise replaces the bare line with a neutral,
+    non-matching reference.
+    """
+    for open_q, close_q in _QUOTE_PAIRS:
+        quoted = f"{open_q}{line}{close_q}"
+        if quoted in text:
+            stripped = text.replace(quoted, "", 1)
+            return re.sub(r"[ \t]{2,}", " ", stripped)
+    return text.replace(line, _FALLBACK_REFERENCE, 1)
+
+
+def enforce_dialogue_occurrences_in_sections(
+    sections: PromptSections,
+    dialogue: Iterable[str],
+    *,
+    exempt_text: str = "",
+) -> PromptSections:
+    """Deterministically make each dialogue line appear exactly the expected times.
+
+    The H3 contract (see ``validate_h3_prompt``) requires each dialogue line to
+    appear in the composed prompt exactly once per occurrence in the dialogue
+    list. The writer LLM often mentions the same line in several sections, which
+    only surfaces as a submit-time rejection (and, when no audio is attached,
+    risks the model speaking the line twice). This backstop rewrites the sections
+    so the count always matches: surplus copies are removed (keeping the spoken
+    occurrence in ``detailed_description`` first), and missing copies are added
+    as explicit spoken clauses. Occurrences inside ``exempt_text`` (the GLOBAL
+    DIRECTION) are never touched. Idempotent: a section set that already matches
+    is returned unchanged.
+    """
+    lines = [line for line in dialogue if line]
+    if not lines:
+        return sections
+
+    expected = Counter(lines)
+    sentinel = "\u0000DIALOGUE_EXEMPT\u0000"
+
+    # Work on copies with the exempt region masked so it can never be rewritten.
+    protected: dict[str, str] = {}
+    for field in PromptSections.model_fields:
+        original = getattr(sections, field) or ""
+        protected[field] = (
+            original.replace(exempt_text, sentinel) if exempt_text else original
+        )
+
+    keep_order = [_SPOKEN_SECTION] + [
+        key for key in SECTION_KEYS if key != _SPOKEN_SECTION
+    ]
+    remove_order = list(reversed(keep_order))
+
+    for line, total_expected in expected.items():
+        # Copies locked inside the GLOBAL DIRECTION can never be removed.
+        protected_count = exempt_text.count(line) if exempt_text else 0
+        target = total_expected - protected_count
+        current = sum(value.count(line) for value in protected.values())
+
+        surplus = current - target
+        if surplus > 0:
+            for field in remove_order:
+                if surplus <= 0:
+                    break
+                value = protected[field]
+                while surplus > 0 and line in value:
+                    value = _remove_one_surplus(value, line)
+                    surplus -= 1
+                protected[field] = value
+        elif surplus < 0:
+            clauses = [
+                f'A speaker delivers the line: "{line}"' for _ in range(-surplus)
+            ]
+            base = protected[_SPOKEN_SECTION].strip()
+            addition = " ".join(clauses)
+            protected[_SPOKEN_SECTION] = (
+                f"{base} {addition}".strip() if base else addition
+            )
+
+    # Restore the exempt region and keep every section body non-empty.
+    updates: dict[str, str] = {}
+    for field, value in protected.items():
+        restored = value.replace(sentinel, exempt_text) if exempt_text else value
+        if not restored.strip():
+            restored = _BLANK_FILLER
+        if restored != (getattr(sections, field) or ""):
+            updates[field] = restored
+    if not updates:
+        return sections
+    return sections.model_copy(update=updates)
 
 
 def validate_h3_prompt(

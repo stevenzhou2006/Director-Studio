@@ -5,6 +5,7 @@ from app.core.projects.models import (
     Shot,
     ShotRef,
     ShotStatus,
+    ShotVoiceRef,
 )
 from app.core.projects.layouts import LayoutReference, LayoutReviewStatus
 from app.core.projects import transitions
@@ -378,6 +379,51 @@ def test_can_submit_without_layout_when_refs_present():
         layout_review_status=None,
         layout_asset_id=None,
     )
+    assert_h3_submittable(shot)  # does not raise
+
+
+def _poem_shot(**overrides) -> Shot:
+    base = dict(
+        id="sht_poem",
+        project_id="prj_poem",
+        scene_id="sc01",
+        title="Couplet 1",
+        script_beat="recitation",
+        duration_s=7.0,
+        status=ShotStatus.needs_review,
+        refs=[ShotRef(role=RefRole.actor, asset_id="act_1", picture_index=1)],
+        prompt_sections=_empty_prompt(),
+        dialogue=["红豆生南国，春来发几枝。"],
+        meta={"poem": {"title": "相思", "author": "王维", "lines": [{"text": "红豆生南国"}]}},
+    )
+    base.update(overrides)
+    return Shot(**base)
+
+
+def test_poem_shot_with_dialogue_requires_bound_voice():
+    shot = _poem_shot()
+    with pytest.raises(ValueError, match="no bound voice reference"):
+        assert_h3_submittable(shot)
+
+
+def test_poem_shot_with_bound_voice_submits():
+    shot = _poem_shot(
+        voice_refs=[
+            ShotVoiceRef(
+                asset_id="voi_recite", audio_index=1, file_key="audio_padded"
+            )
+        ]
+    )
+    assert_h3_submittable(shot)  # does not raise
+
+
+def test_poem_shot_without_dialogue_submits():
+    shot = _poem_shot(dialogue=[])
+    assert_h3_submittable(shot)  # does not raise
+
+
+def test_non_poem_dialogue_shot_may_submit_without_voice():
+    shot = _poem_shot(meta={})
     assert_h3_submittable(shot)  # does not raise
 
 

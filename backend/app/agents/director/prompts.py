@@ -179,6 +179,25 @@ Output rules:
   <Audio N> tag at least once, state the named speaker identity and delivery it controls,
   and never copy words from the reference recording. The same tag may be referenced
   again where it clarifies action or sound; the shot dialogue below is the new performance.
+- A shot that carries dialogue or a poem recitation is DIEGETIC SPEECH by an ON-SCREEN
+  character, never a disembodied narrator, voice-over, or off-screen teller. Name the
+  on-screen character who speaks the line (for a cat-poet shot, the reciting cat DALI) and
+  describe their mouth, jaw, lips, and breath visibly moving in sync with <Audio N> and the
+  words being recited. The voice's timbre — even a child's, stylized, or dialect voice — is
+  that on-screen character's OWN voice; do not present it as a separate person speaking over
+  the picture. In detailed_description, tie the speaking character's mouth movement to the
+  recitation and its timing (for example "DALI faces slightly up, jaw parting and closing in
+  sync with the recited line in <Audio 1>"). A closed or unmoving mouth on a shot that has a
+  recitation is a defect.
+- MOUTH VISIBILITY IS MANDATORY for a recitation/dialogue shot. The speaking character's
+  face and mouth must be in clear view of the camera (front or three-quarter/profile) for the
+  whole spoken line. Do NOT choose a composition that hides the speaker's mouth while the
+  line is delivered — no top-down / high-angle-into-an-object view, no head lowered or turned
+  away, no muzzle buried in a basket/food/prop, no back-of-head framing during the recitation.
+  If the shot's action involves the cat looking down at or handling a prop, have the speaker
+  lift its head to face the camera to recite (the prop action can happen before or after the
+  spoken line, or with the face still up). A recitation whose speaker's mouth is not visible
+  cannot lip-sync and is a defect.
 - Treat each ref's approved_description and approved_notes as authoritative for
   identity, wardrobe, set and prop appearance; never replace them with guesses. A
   Layout's visual_analysis describes composition, blocking, and lighting only: never

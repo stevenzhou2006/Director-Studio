@@ -38,6 +38,7 @@ from ..agents.director.skill_loader import with_director_skill
 from ..config import settings
 from ..core.h3 import (
     compose_h3_prompt,
+    enforce_dialogue_occurrences_in_sections,
     ensure_audio_bindings_in_sections,
     frames_for_audio_seconds,
     frames_for_seconds,
@@ -197,6 +198,7 @@ class UpdateProjectBody(BaseModel):
     script_locked: bool | None = None
     global_prompt: str | None = None
     global_negative: str | None = None
+    watermark: str | None = None
 
 
 class ExpandGlobalDirectionBody(BaseModel):
@@ -314,6 +316,7 @@ class ConcatenateShotsBody(BaseModel):
     output_name: str | None = None
     output_kind: Literal["enhanced", "raw"] | None = None
     reencode: bool = False
+    apply_finish: bool | None = None
 
 
 class ConcatenatedClipInfo(BaseModel):
@@ -333,6 +336,7 @@ class ConcatenateResponse(BaseModel):
     clip_count: int
     duration_s: float | None = None
     clips: list[ConcatenatedClipInfo] = Field(default_factory=list)
+    master_finish: dict[str, Any] | None = None
 
 
 class SubmitResponse(BaseModel):
@@ -595,6 +599,8 @@ async def update_project_endpoint(
         updates["global_prompt"] = body.global_prompt.strip()
     if body.global_negative is not None:
         updates["global_negative"] = body.global_negative.strip()
+    if body.watermark is not None:
+        updates["watermark"] = body.watermark.strip()
     if not updates:
         return project
     project = project.model_copy(update=updates)
@@ -718,14 +724,33 @@ async def concatenate_project_endpoint(
     project_id: str,
     body: ConcatenateShotsBody | None = None,
 ) -> ConcatenateResponse:
-    """Join every Shot's newest succeeded H3 clip into one file with ffmpeg."""
-    if load_project(project_id) is None:
+    """Join every Shot's newest succeeded H3 clip into one file with ffmpeg.
+
+    For poem projects this also applies master-level finishing (title card once,
+    per-segment poem columns on the master timeline, unified loudness-normalized
+    recitation, and the project watermark) in the same call, so the UI
+    "Concatenate all shots" button produces the finished film.
+    """
+    project = load_project(project_id)
+    if project is None:
         raise HTTPException(404, "Project not found")
     options = body or ConcatenateShotsBody()
+    from ..core.jobs.poem_finalize import (
+        PoemMasterFinishError,
+        is_poem_project,
+        run_master_finish,
+    )
+
+    apply_finish = options.apply_finish
+    if apply_finish is None:
+        apply_finish = is_poem_project(project_id)
+    base_name = (
+        f"{options.output_name or 'final'}_base" if apply_finish else options.output_name
+    )
     try:
         result = concatenate_project_shots(
             project_id=project_id,
-            output_name=options.output_name,
+            output_name=base_name,
             output_kind=options.output_kind,
             reencode=options.reencode,
         )
@@ -733,13 +758,38 @@ async def concatenate_project_endpoint(
         raise HTTPException(409, str(e)) from e
     except ValueError as e:
         raise _http_value_error(e) from e
-    return ConcatenateResponse(**result)
+    if not apply_finish:
+        return ConcatenateResponse(**result)
+    try:
+        finish = await run_master_finish(
+            project_id,
+            result,
+            options.output_name,
+            watermark=project.watermark or "",
+        )
+    except PoemMasterFinishError as e:
+        raise HTTPException(409, f"master finish failed: {e}") from e
+    return ConcatenateResponse(
+        **{
+            **result,
+            "output_path": finish["output_path"],
+            "filename": finish["filename"],
+            "url": finish["url"],
+            "master_finish": finish,
+        }
+    )
 
 
 def _chat_result_to_response(result) -> ChatResponse:
     assert result.project is not None
+    reply = result.reply
+    from ..core.code_version import warning_text
+
+    stale = warning_text()
+    if stale:
+        reply = f"⚠️ {stale}\n\n{reply}"
     return ChatResponse(
-        reply=result.reply,
+        reply=reply,
         actions=result.actions,
         project=result.project,
         shots=result.shots,
@@ -2167,6 +2217,17 @@ async def submit_shot_endpoint(
         )
         if bound_sections != shot.prompt_sections:
             shot = shot.model_copy(update={"prompt_sections": bound_sections})
+            save_shot(shot)
+
+    # Heal a stale/cached prompt that mentioned a dialogue line in more (or fewer)
+    # sections than the dialogue list expects, so a direct re-run is not blocked
+    # by the exact-occurrence contract and H3 never speaks a line twice.
+    if shot.dialogue:
+        dialogue_sections = enforce_dialogue_occurrences_in_sections(
+            shot.prompt_sections, shot.dialogue, exempt_text=submit_direction
+        )
+        if dialogue_sections != shot.prompt_sections:
+            shot = shot.model_copy(update={"prompt_sections": dialogue_sections})
             save_shot(shot)
 
     try:

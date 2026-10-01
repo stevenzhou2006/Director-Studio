@@ -412,7 +412,7 @@ Recommended pipeline; use judgment to decide when to advance:
    for a tail-frame origin, the extracted frame is Image1; add other references only when they have a specific job
 8) write_prompt — generate or rewrite the six H3 sections after a reference frame exists; no approval step is required
 9) H3 video generation happens later in Production
-10) concatenate_shots — once every Shot has a succeeded H3 clip, assemble the finished clips in Shot order into one file with ffmpeg and report the absolute host path it returns
+ 10) concatenate_shots — once every Shot has a succeeded H3 clip, assemble the finished clips in Shot order into one file with ffmpeg and report the absolute host path it returns; for poem projects this also applies master-level finishing in the same call: the title card burned in exactly once at the head of the film, every poem column timed on the master timeline, the unified recitation audio replacing the per-shot H3 tracks, and the project watermark burned bottom-right across the whole film
  11) generate_tts_audio — generate speech or recitation audio through ComfyUI Qwen3-TTS. For the Sichuan Longchang dialect recitation use style="longchang-girl" with character-level retroflex-to-flat respell pairs drawn from the poem's own characters (at least three); style="eric" is the native Sichuan CustomVoice speaker and style="custom" takes your own instruct. Pass lead_silence_s when the audio will be an H3 mouth-sync reference. ALWAYS pass shot_id (or shot_index/title) for the Shot the line is spoken in: the saved Voice is marked H3-ready and attached to that Shot's voice refs so H3 recites with this exact accent instead of inventing its own voice. If that Shot already has an H3-ready voice the call is skipped (no duplicate take) unless you pass force=true on the user's explicit request; when a Shot has no voice or only a non-ready one, generate as the prompt requires
 12) overlay_poem_subtitles — burn an elegant title card and traditional vertical calligraphy poem columns onto an existing clip with ffmpeg (CPU only). Supply source_shot_id (newest succeeded H3 clip) and ordered lines with their start seconds taken from ASR word timestamps on the recitation audio; never guess timing
 
@@ -434,8 +434,9 @@ Tools (name + args):
 - revise_ref_frame  {"shot_id":"...","layout_ref_id":"...","feedback":"concise actionable summary","additional_source_refs":[]}
 - concatenate_shots  {"output_name":"optional stem","output_kind":"enhanced|raw","reencode":false}  // joins all finished Shot clips in order; report the absolute output path
 - generate_tts_audio  {"text":"...","name":"...","style":"longchang-girl|eric|custom","respell":"<retroflex=flat,...>","emotion":"...","lead_silence_s":1.0,"shot_id":"<shot this line is spoken in>","force":false,"save_to_library":true}  // ComfyUI Qwen3-TTS; longchang-girl needs poem-specific respell pairs; shot_id auto-marks H3-ready and binds the voice to that Shot; skipped if that Shot already has an H3-ready voice unless force=true
-- overlay_poem_subtitles  {"source_shot_id":"...","source_version":"latest|vN","title":"...","author":"...","dynasty":"<dynasty>","seal":"<char>","lines":[{"text":"<line>","start_s":1.06}]}
-- write_prompt / get_status
+ - overlay_poem_subtitles  {"source_shot_id":"...","source_version":"latest|vN","title":"...","author":"...","dynasty":"<dynasty>","seal":"<char>","show_title":true,"lines":[{"text":"<line>","start_s":1.06}]}  // ad-hoc single-clip overlay; show_title defaults to the first-poem-shot rule
+ - set_watermark  {"watermark":"<brand handle, e.g. @handle>"}  // brand mark burned bottom-right into the finished master once at master-level finishing; empty clears
+ - write_prompt / get_status
 
 Vision: the system may attach Image 1…N when the user asks you to inspect references or composition. Describe only what is actually visible.
 

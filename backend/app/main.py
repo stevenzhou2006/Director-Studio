@@ -23,6 +23,14 @@ logger = logging.getLogger("director_studio")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     try:
+        from .core.code_version import stale_files
+
+        if stale_files():
+            logger.warning(
+                "startup: %d backend file(s) newer than process start: %s",
+                len(stale_files()),
+                ", ".join(stale_files()[:10]),
+            )
         recovered = await recover_interrupted_jobs()
         if recovered:
             logger.info("recovered %d interrupted jobs on startup", len(recovered))

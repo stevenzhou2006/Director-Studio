@@ -337,10 +337,9 @@ def _sync_h3_ref2va(job: JobRecord) -> None:
         new_status.value,
     )
 
-    if new_status == ShotStatus.succeeded:
-        from .poem_finalize import schedule_poem_finalize
-
-        schedule_poem_finalize(job, updated)
+    # Per-shot auto-finalize is retired: poem finishing (title card once, columns,
+    # unified recitation, watermark) now happens once at master-level finishing in
+    # concatenate_shots. The H3 ``video`` slot stays the raw render until then.
 
 
 def _sync_poem_overlay(job: JobRecord) -> None:

@@ -431,7 +431,35 @@ def assert_h3_submittable(shot: Shot) -> None:
             f"is {status} and cannot be used for H3"
         )
 
+    _assert_poem_voice_bound(shot)
     _assert_prompt_complete(shot.prompt_sections)
+
+
+def _assert_poem_voice_bound(shot: Shot) -> None:
+    """A poem recitation shot must hear the line it speaks.
+
+    Lip sync is a property of the generated pixels: it only exists when the
+    recitation was submitted as an ``<Audio N>`` reference during H3
+    generation. Master finishing swaps the approved recitation over whatever
+    H3 rendered, so a dialogue shot rendered without a bound voice can never
+    be fixed in post. Block that state deterministically.
+    """
+    poem = (shot.meta or {}).get("poem")
+    if not isinstance(poem, dict):
+        return
+    if not (str(poem.get("title") or "").strip() and str(poem.get("author") or "").strip()):
+        return
+    if not shot.dialogue:
+        return
+    if shot.voice_refs or shot.source_audio_path:
+        return
+    raise ValueError(
+        f"shot {shot.title!r} has poem dialogue but no bound voice reference, "
+        "so lips cannot sync with the recitation. Bind the H3-ready recitation "
+        "first: save_storyboard voice_matches (asset_id + audio_index; the "
+        "take key auto-resolves) or generate_tts_audio with this shot_id, "
+        "then re-render H3."
+    )
 
 
 def _assert_prompt_complete(sections: PromptSections) -> None:

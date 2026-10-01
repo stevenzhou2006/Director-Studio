@@ -33,9 +33,11 @@ async def handle_media_tool(
         notes.append(runtime.status_summary(project, shots))
         return True
     if name == "concatenate_shots":
-        _handle_concatenate_shots(
+        await _handle_concatenate_shots(
             args=args,
             project_id=project_id,
+            project=project,
+            runtime=runtime,
             actions=actions,
             notes=notes,
             result_payloads=result_payloads,
@@ -117,14 +119,18 @@ async def handle_media_tool(
     return True
 
 
-def _handle_concatenate_shots(
+async def _handle_concatenate_shots(
     *,
     args: dict[str, Any],
     project_id: str,
+    project: Project,
+    runtime: Any,
     actions: list[str],
     notes: list[str],
     result_payloads: list[dict[str, Any]] | None,
 ) -> None:
+    from ....core.jobs.poem_finalize import is_poem_project
+
     output_name = args.get("output_name")
     output_name = str(output_name).strip() if output_name else None
     output_kind = args.get("output_kind")
@@ -132,10 +138,16 @@ def _handle_concatenate_shots(
     if output_kind not in (None, "enhanced", "raw"):
         output_kind = None
     reencode = bool(args.get("reencode"))
+    apply_finish = args.get("apply_finish")
+    if apply_finish is None:
+        apply_finish = is_poem_project(project_id)
+    apply_finish = bool(apply_finish)
+
+    base_name = f"{output_name or 'final'}_base" if apply_finish else output_name
     try:
         result = concatenate_project_shots(
             project_id=project_id,
-            output_name=output_name,
+            output_name=base_name,
             output_kind=output_kind,
             reencode=reencode,
         )
@@ -146,12 +158,47 @@ def _handle_concatenate_shots(
         return
 
     actions.append("concatenate_shots")
+
+    if not apply_finish:
+        if result_payloads is not None:
+            result_payloads.append(result)
+        method = "stream copy" if result["method"] == "copy" else "re-encode"
+        notes.append(
+            f"Concatenated {result['clip_count']} shot clip(s) into "
+            f"**{result['filename']}** ({method}). Output file on this host:\n"
+            f"`{result['output_path']}`\n"
+            f"Preview: {result['url']}"
+        )
+        return
+
+    # Master-level finishing: title once, per-segment columns on the master
+    # timeline, unified (loudness-normalized) recitation, watermark — one pass.
+    from ....core.jobs.poem_finalize import PoemMasterFinishError, run_master_finish
+
+    try:
+        finish = await run_master_finish(
+            project_id,
+            result,
+            output_name,
+            watermark=project.watermark or "",
+        )
+    except PoemMasterFinishError as exc:
+        if result_payloads is not None:
+            result_payloads.append({"ok": False, "error": str(exc), "base": result})
+        notes.append(
+            f"concatenate_shots: base film joined but master finish failed: {exc}"
+        )
+        return
+
     if result_payloads is not None:
-        result_payloads.append(result)
-    method = "stream copy" if result["method"] == "copy" else "re-encode"
+        payload = dict(result)
+        payload["master_finish"] = finish
+        result_payloads.append(payload)
     notes.append(
-        f"Concatenated {result['clip_count']} shot clip(s) into "
-        f"**{result['filename']}** ({method}). Output file on this host:\n"
-        f"`{result['output_path']}`\n"
-        f"Preview: {result['url']}"
+        f"Concatenated {result['clip_count']} shot clip(s) and master-finished "
+        f"**{finish['filename']}** (title card once, per-segment poem columns, "
+        f"unified recitation"
+        + (f", watermark {project.watermark}" if project.watermark else "")
+        + f"). Output file on this host:\n`{finish['output_path']}`\n"
+        f"Preview: {finish['url']}"
     )

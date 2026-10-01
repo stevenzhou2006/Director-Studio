@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -74,6 +76,134 @@ def is_first_poem_shot(project_id: str, shot_id: str) -> bool:
             return False
     # shot not listed in project.shot_ids: treat as first.
     return True
+
+
+class PoemMasterFinishError(ValueError):
+    """Raised when a poem project cannot be master-finished."""
+
+
+def is_poem_project(project_id: str) -> bool:
+    """True when every shot in the project carries poem title/author + lines."""
+    project = load_project(project_id)
+    if project is None or not project.shot_ids:
+        return False
+    for shot_id in project.shot_ids:
+        shot = load_shot(project_id, shot_id)
+        if shot is None:
+            return False
+        poem = get_poem_dict(shot)
+        lines = poem.get("lines")
+        if not _has_poem_identity(shot) or not isinstance(lines, list) or not lines:
+            return False
+    return True
+
+
+def build_master_finish_plan(
+    project_id: str, clips: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the master-finish plan from the resolved concat clips.
+
+    ``clips`` entries must carry ``shot_id`` and ``duration_s``. Returns
+    ``{"segments": [...], "audio_parts": [(path, duration), ...],
+    "total_duration": float}``. Raises :class:`PoemMasterFinishError` if a
+    shot lacks a resolvable recitation (the all-shots-must-have-recitation
+    policy) or poem meta.
+    """
+    if not clips:
+        raise PoemMasterFinishError("no clips to master-finish")
+    segments: list[dict[str, Any]] = []
+    audio_parts: list[tuple[Path, float]] = []
+    offset = 0.0
+    for clip in clips:
+        shot_id = str(clip.get("shot_id") or "")
+        shot = load_shot(project_id, shot_id) if shot_id else None
+        if shot is None:
+            raise PoemMasterFinishError(f"cannot resolve shot for clip {clip}")
+        poem = get_poem_dict(shot)
+        if not _has_poem_identity(shot):
+            raise PoemMasterFinishError(
+                f"shot {shot.title} ({shot.id}) has no poem title/author"
+            )
+        raw_lines = poem.get("lines")
+        if not isinstance(raw_lines, list) or not raw_lines:
+            raise PoemMasterFinishError(f"shot {shot.title} ({shot.id}) has no lines")
+        duration = float(clip.get("duration_s") or shot.duration_s or 0.0)
+        if duration <= 0:
+            raise PoemMasterFinishError(
+                f"shot {shot.title} ({shot.id}) has no usable clip duration"
+            )
+        try:
+            audio_path, _lead = timing.resolve_recitation_audio(shot)
+        except timing.PoemTimingError as exc:
+            raise PoemMasterFinishError(
+                f"shot {shot.title} ({shot.id}) has no resolvable recitation: {exc}"
+            ) from exc
+        lines = [entry for entry in raw_lines if isinstance(entry, dict)]
+        starts = _resolve_line_starts(lines, audio_path, duration)
+        timed = [
+            {"text": str(entry.get("text") or ""), "start_s": start}
+            for entry, start in zip(lines, starts)
+        ]
+        segments.append({"offset_s": round(offset, 3), "lines": timed})
+        audio_parts.append((audio_path, duration))
+        offset += duration
+    return {
+        "segments": segments,
+        "audio_parts": audio_parts,
+        "total_duration": round(offset, 3),
+    }
+
+
+def build_unified_recitation(
+    parts: list[tuple[Path, float]], out_path: Path, *, target_lufs: float = -16.0
+) -> None:
+    """Concatenate per-shot recitations into one continuous track.
+
+    Each recitation is loudness-normalized (EBU R128) to a common target before
+    being trimmed/padded to its segment duration, so separately generated TTS
+    takes do not play at different volumes across the film.
+    """
+    if not parts:
+        raise PoemMasterFinishError("no recitation parts to unify")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise PoemMasterFinishError("ffmpeg is required to build the unified recitation")
+    inputs: list[str] = []
+    filters: list[str] = []
+    for index, (audio, duration) in enumerate(parts):
+        if not Path(audio).is_file():
+            raise PoemMasterFinishError(f"recitation file missing: {audio}")
+        inputs += ["-i", str(audio)]
+        filters.append(
+            f"[{index}:a]atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
+            f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11,"
+            f"apad=whole_dur={duration:.3f}[a{index}]"
+        )
+    concat_in = "".join(f"[a{i}]" for i in range(len(parts)))
+    filters.append(f"{concat_in}concat=n={len(parts)}:v=0:a=1[out]")
+    command = [
+        ffmpeg,
+        "-y",
+        "-v",
+        "error",
+        *inputs,
+        "-filter_complex",
+        ";".join(filters),
+        "-map",
+        "[out]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        str(out_path),
+    ]
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=False, encoding="utf-8", errors="replace"
+    )
+    if result.returncode != 0:
+        raise PoemMasterFinishError(
+            f"unified recitation failed: {result.stderr.strip()[-800:]}"
+        )
 
 
 def _slot_file(slot: OutputSlot | None, job: JobRecord) -> Path | None:
@@ -249,3 +379,91 @@ def schedule_poem_finalize(h3_job: JobRecord, shot: Shot) -> None:
             target=lambda: asyncio.run(_guarded_finalize(h3_job, shot)),
             daemon=True,
         ).start()
+
+
+def first_poem_meta(project_id: str) -> dict[str, Any]:
+    """The poem identity carried by the project's first poem-bearing shot."""
+    from ..projects.store import list_shots
+
+    for shot in list_shots(project_id):
+        poem = get_poem_dict(shot)
+        if poem.get("title") and poem.get("author"):
+            return poem
+    return {}
+
+
+async def run_master_finish(
+    project_id: str,
+    base_result: dict[str, Any],
+    output_name: str | None,
+    *,
+    watermark: str = "",
+) -> dict[str, Any]:
+    """Master-level finish of a concatenated base film.
+
+    Builds the loudness-normalized unified recitation, then composites the
+    title card once + per-segment poem columns + the watermark in a single
+    overlay pass, and returns the finished result (output path/url + overlay
+    meta). Raises :class:`PoemMasterFinishError` if the project cannot be
+    finished (missing recitation, poem meta, or a failed render). Shared by
+    the Director ``concatenate_shots`` tool and the REST concatenate
+    endpoint so the UI button produces the same finished film.
+    """
+    import tempfile
+
+    plan = build_master_finish_plan(project_id, base_result["clips"])
+    base_path = Path(base_result["output_path"])
+    with tempfile.TemporaryDirectory(prefix="ds-master-") as tmp:
+        unified = Path(tmp) / "recitation.m4a"
+        await asyncio.to_thread(build_unified_recitation, plan["audio_parts"], unified)
+        poem = first_poem_meta(project_id)
+        job = store.create_job(
+            pipeline_id=OVERLAY_PIPELINE_ID,
+            asset_kind="productions",
+            name=f"master finish: {output_name or project_id}",
+            notes=(
+                f"master-level finish of {base_result['clip_count']} shot(s): "
+                "title card once + per-segment poem columns + unified "
+                "recitation + "
+                + (f"watermark {watermark}" if watermark else "no watermark")
+            ),
+            params={
+                "title": poem.get("title"),
+                "author": poem.get("author"),
+                "dynasty": poem.get("dynasty") or "唐",
+                "seal": poem.get("seal") or "狸",
+                "segments": plan["segments"],
+                "output_name": output_name or "final",
+                "show_title": True,
+                "watermark": watermark or "",
+                "project_id": project_id,
+                "master_finish": True,
+                "source_base_path": str(base_path),
+            },
+            project_id=project_id,
+        )
+        from .runner import await_pipeline_job, start_pipeline_job
+
+        await start_pipeline_job(
+            job,
+            images={
+                "video": (
+                    base_path.name,
+                    await asyncio.to_thread(base_path.read_bytes),
+                ),
+                "audio": (unified.name, await asyncio.to_thread(unified.read_bytes)),
+            },
+        )
+        terminal = await await_pipeline_job(job.id)
+    if terminal is None or terminal.status != JobStatus.succeeded:
+        err = (terminal.error if terminal else "job disappeared") or "master finish failed"
+        raise PoemMasterFinishError(err)
+    video_slot = (terminal.outputs or {}).get("video")
+    meta = (terminal.params or {}).get("overlay") or {}
+    return {
+        "job_id": terminal.id,
+        "output_path": video_slot.path if video_slot else None,
+        "filename": video_slot.filename if video_slot else None,
+        "url": video_slot.url if video_slot else None,
+        "overlay": meta,
+    }

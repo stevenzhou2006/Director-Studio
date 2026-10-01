@@ -201,3 +201,188 @@ def test_shot_from_draft_does_not_guess_missing_voice_id(director_voice_env):
     )
 
     assert shot.voice_refs == []
+
+
+def _tts_voice_asset(project_id: str, asset_id: str, name: str) -> LibraryAsset:
+    directory = asset_dir("voices", asset_id, project_id=project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "audio.flac").write_bytes(b"RIFF-audio")
+    (directory / "audio_padded.flac").write_bytes(b"RIFF-padded")
+    return write_asset(
+        LibraryAsset(
+            id=asset_id,
+            kind="voices",
+            name=name,
+            notes="generated recitation",
+            pipeline_id="tts",
+            job_id="job_tts",
+            created_at="2026-09-27T00:00:00+00:00",
+            files={"audio": "audio.flac", "audio_padded": "audio_padded.flac"},
+            meta={
+                "duration_s": 6.9,
+                "h3_ready": True,
+                "h3_file_key": "audio_padded",
+            },
+            project_id=project_id,
+        )
+    )
+
+
+def test_plan_parser_accepts_voice_match_without_file_key():
+    from app.agents.director.planner import parse_shot_drafts
+
+    drafts = parse_shot_drafts(
+        json.dumps(
+            [
+                {
+                    **CAMERA_DRAFT,
+                    "scene_id": "sc01",
+                    "title": "Couplet",
+                    "script_beat": "recitation",
+                    "duration_s": 7,
+                    "dialogue": ["红豆生南国，春来发几枝。"],
+                    "voice_matches": [{"asset_id": "voi_tts", "audio_index": 1}],
+                }
+            ]
+        )
+    )
+
+    assert drafts[0].voice_matches[0].file_key is None
+
+
+def test_shot_from_draft_auto_resolves_tts_voice_take(director_voice_env):
+    from app.agents.director.planner import ShotDraft, VoiceMatchDraft
+    from app.agents.director.service import _asset_index, _inventory, _shot_from_draft
+
+    _tts_voice_asset("prj_voice", "voi_tts", "Recitation")
+    draft = ShotDraft(
+        **CAMERA_DRAFT,
+        scene_id="sc01",
+        title="Couplet 1",
+        script_beat="recitation",
+        duration_s=7,
+        dialogue=["红豆生南国，春来发几枝。"],
+        voice_matches=[VoiceMatchDraft(asset_id="voi_tts", audio_index=1)],
+    )
+    shot = _shot_from_draft(
+        "prj_voice",
+        draft,
+        inventory=_inventory("prj_voice"),
+        index=_asset_index("prj_voice"),
+    )
+
+    assert len(shot.voice_refs) == 1
+    assert shot.voice_refs[0].file_key == "audio_padded"
+
+
+def test_shot_from_draft_honors_explicit_valid_voice_take(director_voice_env):
+    from app.agents.director.planner import ShotDraft, VoiceMatchDraft
+    from app.agents.director.service import _asset_index, _inventory, _shot_from_draft
+
+    _tts_voice_asset("prj_voice", "voi_tts", "Recitation")
+    draft = ShotDraft(
+        **CAMERA_DRAFT,
+        scene_id="sc01",
+        title="Couplet 1",
+        script_beat="recitation",
+        duration_s=7,
+        dialogue=["红豆生南国，春来发几枝。"],
+        voice_matches=[
+            VoiceMatchDraft(asset_id="voi_tts", audio_index=1, file_key="audio")
+        ],
+    )
+    shot = _shot_from_draft(
+        "prj_voice",
+        draft,
+        inventory=_inventory("prj_voice"),
+        index=_asset_index("prj_voice"),
+    )
+
+    assert shot.voice_refs[0].file_key == "audio"
+
+
+def test_validate_bindings_rejects_unknown_voice_key_with_actionable_hint(
+    director_voice_env,
+):
+    from app.agents.director.casting_service import _validate_storyboard_bindings
+    from app.agents.director.planner import ShotDraft, VoiceMatchDraft
+    from app.agents.director.service import _asset_index, _inventory
+
+    _tts_voice_asset("prj_voice", "voi_tts", "Recitation")
+    draft = ShotDraft(
+        **CAMERA_DRAFT,
+        scene_id="sc01",
+        title="Couplet 1",
+        script_beat="recitation",
+        duration_s=7,
+        voice_matches=[
+            VoiceMatchDraft(asset_id="voi_tts", audio_index=1, file_key="reference")
+        ],
+    )
+
+    with pytest.raises(ValueError, match="available takes.*auto-bind"):
+        _validate_storyboard_bindings(
+            [draft],
+            inventory=_inventory("prj_voice"),
+            index=_asset_index("prj_voice"),
+        )
+
+
+def test_validate_bindings_ignores_layout_echo_and_accepts_notes(
+    director_voice_env,
+):
+    from app.agents.director.casting_service import _validate_storyboard_bindings
+    from app.agents.director.planner import ShotDraft
+    from app.agents.director.service import _asset_index, _inventory
+
+    actor = _seed_image_asset("prj_voice", "act_1", "actors")
+    draft = ShotDraft.model_validate(
+        {
+            **CAMERA_DRAFT,
+            "scene_id": "sc01",
+            "title": "Couplet 1",
+            "script_beat": "recitation",
+            "duration_s": 7,
+            "asset_matches": [
+                {
+                    "role": "actor",
+                    "asset_id": actor.id,
+                    "picture_index": 1,
+                    "notes": "tabby lead",
+                },
+                {
+                    "role": "layout_ref_frame",
+                    "asset_id": "lay_1",
+                    "file_key": "layout",
+                    "picture_index": 2,
+                },
+            ],
+        }
+    )
+
+    _validate_storyboard_bindings(
+        [draft],
+        inventory=_inventory("prj_voice"),
+        index=_asset_index("prj_voice"),
+    )
+    assert draft.asset_matches[0].notes == "tabby lead"
+
+
+def _seed_image_asset(project_id: str, asset_id: str, kind: str) -> LibraryAsset:
+    directory = asset_dir(kind, asset_id, project_id=project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "master.png").write_bytes(b"png-bytes")
+    return write_asset(
+        LibraryAsset(
+            id=asset_id,
+            kind=kind,
+            name=f"{kind} {asset_id}",
+            notes="",
+            pipeline_id="external",
+            job_id="",
+            created_at="2026-08-25T00:00:00+00:00",
+            files={"master": "master.png"},
+            meta={},
+            project_id=project_id,
+        )
+    )

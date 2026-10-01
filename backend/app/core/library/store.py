@@ -313,11 +313,17 @@ def create_external_motion_asset(
         raise ValueError("unsupported video file type")
 
     adir = asset_write_dir("motions", asset_id, project_id=pid)
-    clip_name = f"clip{suffix}"
+    clip_name = "clip.mp4"
     try:
         adir.mkdir(parents=True, exist_ok=False)
+        raw_path = adir / "raw_upload.mp4"
+        raw_path.write_bytes(video_bytes)
+        # Normalize to 24 fps / short edge <=512 before storing: H3 consumes
+        # ref videos as frame batches, and a 30fps 720p clip triples the
+        # conditioning cost versus the 24fps small-frame path.
         clip_path = adir / clip_name
-        clip_path.write_bytes(video_bytes)
+        _transcode_motion_clip(raw_path, clip_path)
+        raw_path.unlink()
         duration_s = _probe_video_duration(clip_path)
         # 0.5s tolerance for container/frame rounding at the 15s boundary.
         if not 1.5 <= duration_s <= 15.5:
@@ -368,6 +374,27 @@ def _probe_video_duration(path: Path) -> float:
         return float(proc.stdout.strip())
     except ValueError as exc:
         raise ValueError(f"unable to probe video duration: {path.name}") from exc
+
+
+def _transcode_motion_clip(src: Path, dst: Path) -> None:
+    """Re-encode a motion clip to 24 fps with short edge capped at 512px."""
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", "-i", str(src),
+            "-vf",
+            r"fps=24,scale=if(lt(iw\,ih)\,512\,-2):if(lt(iw\,ih)\,-2\,512)",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-an", str(dst),
+        ],
+        capture_output=True,
+    )
+    if not dst.is_file() or dst.stat().st_size == 0:
+        raise ValueError(
+            "failed to transcode motion clip"
+            + (f": {proc.stderr.decode(errors='ignore')[:200]}" if proc.stderr else "")
+        )
 
 
 def create_external_voice_asset(

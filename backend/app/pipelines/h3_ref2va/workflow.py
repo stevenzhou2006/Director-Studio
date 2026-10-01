@@ -266,14 +266,22 @@ def fill_profile_graph(
         h3_inputs[input_name] = [node_id, 0]
 
     for index, video_name in enumerate(videos):
-        node_id = str(next_id)
+        load_id = str(next_id)
         next_id += 1
-        filled[node_id] = {
+        filled[load_id] = {
             "class_type": "LoadVideo",
             "inputs": {"file": video_name},
             "_meta": {"title": f"Ref Video {index}"},
         }
-        h3_inputs[f"ref_videos.ref_video_{index}"] = [node_id, 0]
+        # ref_videos takes video FRAMES as an IMAGE batch, not a VIDEO object.
+        comp_id = str(next_id)
+        next_id += 1
+        filled[comp_id] = {
+            "class_type": "GetVideoComponents",
+            "inputs": {"video": [load_id, 0]},
+            "_meta": {"title": f"Ref Video Frames {index}"},
+        }
+        h3_inputs[f"ref_videos.ref_video_{index}"] = [comp_id, 0]
     for index, video_audio_name in enumerate(video_audios):
         if not video_audio_name:
             continue

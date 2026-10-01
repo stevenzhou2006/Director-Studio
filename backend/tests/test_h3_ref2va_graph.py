@@ -164,10 +164,13 @@ def test_fill_wires_reference_videos_and_pairing_audio():
         ),
     )
     h3 = g["10"]["inputs"]
-    assert h3["ref_videos.ref_video_0"][0] in g
+    # ref_videos wants IMAGE frames: LoadVideo -> GetVideoComponents -> H3
+    comp0 = g[h3["ref_videos.ref_video_0"][0]]
+    assert comp0["class_type"] == "GetVideoComponents"
+    load0 = g[comp0["inputs"]["video"][0]]
+    assert load0["class_type"] == "LoadVideo"
+    assert load0["inputs"] == {"file": "motion.mp4"}
     assert h3["ref_videos.ref_video_1"][0] in g
-    assert g[h3["ref_videos.ref_video_0"][0]]["class_type"] == "LoadVideo"
-    assert g[h3["ref_videos.ref_video_0"][0]]["inputs"] == {"file": "motion.mp4"}
     # Index-aligned pairing: only video 0 has a soundtrack.
     audio_keys = [k for k in h3 if k.startswith("ref_video_audios.")]
     assert audio_keys == ["ref_video_audios.ref_video_audio_0"]

@@ -68,6 +68,7 @@ from ..core.projects.models import (
     PromptSections,
     RefRole,
     Shot,
+    ShotMotionRef,
     ShotRef,
     ShotVoiceRef,
     ShotStatus,
@@ -276,6 +277,7 @@ class ApproveLayoutBody(BaseModel):
 class ShotPatchBody(BaseModel):
     refs: list[ShotRef] | None = None
     voice_refs: list[ShotVoiceRef] | None = None
+    motion_refs: list[ShotMotionRef] | None = None
     prompt_sections: PromptSections | None = None
     duration_s: float | None = None
     dialogue: list[str] | None = None
@@ -443,6 +445,29 @@ def _validate_voice_refs(shot: Shot) -> list[tuple[ShotVoiceRef, LibraryAsset, P
 
 def _voice_signature(refs: list[ShotVoiceRef]) -> str:
     return voice_ref_signature(refs)
+
+
+def _resolve_motion_refs(shot: Shot) -> list[tuple[ShotMotionRef, Path]]:
+    """Validate motion refs and return (ref, clip path) in video_index order."""
+    resolved: list[tuple[ShotMotionRef, Path]] = []
+    for ref in sorted(shot.motion_refs, key=lambda r: r.video_index):
+        asset = load_asset("motions", ref.asset_id)
+        if asset is None:
+            raise ValueError(f"Motion asset not found: {ref.asset_id}")
+        if asset.kind != "motions":
+            raise ValueError(f"asset is not a Motion reference: {ref.asset_id}")
+        if asset.project_id != shot.project_id:
+            raise ValueError(f"Motion asset belongs to another project: {ref.asset_id}")
+        filename = (asset.files or {}).get(ref.file_key)
+        if not filename:
+            raise ValueError(
+                f"Motion asset missing file key {ref.file_key!r}: {ref.asset_id}"
+            )
+        path = asset_dir("motions", ref.asset_id, project_id=asset.project_id) / filename
+        if not path.is_file():
+            raise ValueError(f"Motion clip file not found: {ref.asset_id}/{filename}")
+        resolved.append((ref, path))
+    return resolved
 
 
 def _http_value_error(exc: ValueError) -> HTTPException:
@@ -1815,6 +1840,13 @@ async def patch_shot_endpoint(shot_id: str, body: ShotPatchBody) -> Shot:
             else ShotVoiceRef.model_validate(ref)
             for ref in updates["voice_refs"]
         ]
+    if "motion_refs" in updates and isinstance(updates["motion_refs"], list):
+        updates["motion_refs"] = [
+            ref
+            if isinstance(ref, ShotMotionRef)
+            else ShotMotionRef.model_validate(ref)
+            for ref in updates["motion_refs"]
+        ]
     if not updates:
         return shot
     payload = shot.model_dump(mode="python")
@@ -2281,6 +2313,28 @@ async def submit_shot_endpoint(
             key = f"voice_audio_{ref.audio_index}"
             audio_keys.append(key)
             images[key] = (audio_path.name, audio_path.read_bytes())
+    try:
+        resolved_motion_refs = _resolve_motion_refs(shot)
+    except ValueError as e:
+        raise _http_value_error(e) from e
+    video_keys: list[str] = []
+    video_audio_keys: list[str] = []
+    for ref, clip_path in resolved_motion_refs:
+        vkey = f"ref_video_{ref.video_index - 1}"
+        video_keys.append(vkey)
+        images[vkey] = (clip_path.name, clip_path.read_bytes())
+        if ref.use_audio:
+            from .json_production import _extract_audio_wav
+
+            try:
+                audio_bytes = _extract_audio_wav(clip_path.read_bytes())
+            except ValueError as e:
+                raise _http_value_error(
+                    ValueError(f"Motion {ref.video_index}: {e}")
+                ) from e
+            akey = f"ref_video_audio_{ref.video_index - 1}"
+            video_audio_keys.append(akey)
+            images[akey] = (f"{akey}.wav", audio_bytes)
     project = load_project(shot.project_id)
     portrait = bool(
         project
@@ -2319,6 +2373,8 @@ async def submit_shot_endpoint(
             "duration_s": shot.duration_s,
             "image_keys": image_keys,
             "audio_keys": audio_keys,
+            "video_keys": video_keys,
+            "video_audio_keys": video_audio_keys,
             "native_audio_key": native_audio_key,
             "width": width,
             "height": height,

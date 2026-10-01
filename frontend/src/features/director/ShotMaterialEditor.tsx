@@ -11,7 +11,7 @@ import {
   type ShotMaterialSelection,
 } from "./api";
 
-type PictureKind = Exclude<LibraryKind, "voices">;
+type PictureKind = Exclude<LibraryKind, "voices" | "motions">;
 
 const PICTURE_KINDS: PictureKind[] = ["actors", "scenes", "costumes", "props", "layouts"];
 const KIND_LABELS: Record<PictureKind, string> = {
@@ -29,6 +29,7 @@ const ROLE_BY_KIND: Record<LibraryKind, RefRole | null> = {
   props: "prop",
   layouts: "layout_ref_frame",
   voices: null,
+  motions: null,
 };
 
 function preferredFileKey(asset: LibraryAsset): string | null {

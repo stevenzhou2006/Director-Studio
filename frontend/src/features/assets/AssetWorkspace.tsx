@@ -17,6 +17,7 @@ const CATEGORIES: { id: AssetCategory; label: string; eyebrow: string }[] = [
   { id: "scenes", label: "Scenes", eyebrow: "World and locations" },
   { id: "props", label: "Props", eyebrow: "Story objects" },
   { id: "voices", label: "Voices", eyebrow: "Performance reference" },
+  { id: "motions", label: "Motions", eyebrow: "Dance / action reference clips" },
 ];
 
 const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
@@ -24,6 +25,7 @@ const IMPORT_LABELS: Record<PreparedAssetCategory, string> = {
   scenes: "scene",
   props: "prop",
   voices: "voice",
+  motions: "motion clip",
 };
 
 export function AssetWorkspace() {

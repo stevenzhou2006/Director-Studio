@@ -290,6 +290,86 @@ def create_external_asset(
     return load_asset(kind, asset_id) or asset
 
 
+_MOTION_SUFFIXES = frozenset({".mp4", ".mov", ".webm", ".mkv"})
+
+
+def create_external_motion_asset(
+    *,
+    name: str,
+    notes: str = "",
+    project_id: str | None = None,
+    video_bytes: bytes,
+    video_filename: str,
+    source_filename: str | None = None,
+) -> LibraryAsset:
+    """Import a motion reference video clip for H3 <Video N> conditioning."""
+    label = (name or "").strip()
+    if not label:
+        raise ValueError("name is required for Motion assets")
+    pid = (project_id or "").strip() or None
+    asset_id = new_asset_id("motions")
+    suffix = Path(video_filename or "motion.mp4").suffix.lower()
+    if suffix not in _MOTION_SUFFIXES:
+        raise ValueError("unsupported video file type")
+
+    adir = asset_write_dir("motions", asset_id, project_id=pid)
+    clip_name = f"clip{suffix}"
+    try:
+        adir.mkdir(parents=True, exist_ok=False)
+        clip_path = adir / clip_name
+        clip_path.write_bytes(video_bytes)
+        duration_s = _probe_video_duration(clip_path)
+        # 0.5s tolerance for container/frame rounding at the 15s boundary.
+        if not 1.5 <= duration_s <= 15.5:
+            raise ValueError(
+                f"motion reference must be 2-15 seconds, got {duration_s:.1f}s"
+            )
+        asset = LibraryAsset(
+            id=asset_id,
+            kind="motions",
+            name=label,
+            notes=(notes or "").strip(),
+            pipeline_id="external",
+            job_id="",
+            seed=None,
+            created_at=_now(),
+            files={"clip": clip_name},
+            meta={
+                "source": "external_import",
+                "source_filename": source_filename or video_filename,
+                "description": (notes or "").strip(),
+                "duration_s": duration_s,
+                "external": True,
+            },
+            project_id=pid,
+        )
+        _write_asset(asset)
+        return load_asset("motions", asset_id) or asset
+    except Exception:
+        if adir.exists():
+            shutil.rmtree(adir)
+        raise
+
+
+def _probe_video_duration(path: Path) -> float:
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        return float(proc.stdout.strip())
+    except ValueError as exc:
+        raise ValueError(f"unable to probe video duration: {path.name}") from exc
+
+
 def create_external_voice_asset(
     *,
     name: str,

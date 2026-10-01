@@ -125,6 +125,14 @@ export interface ShotVoiceRef {
   notes?: string;
 }
 
+export interface ShotMotionRef {
+  asset_id: string;
+  video_index: number;
+  file_key: string;
+  use_audio: boolean;
+  notes?: string;
+}
+
 export interface PromptSections {
   subject_definitions: string;
   summary: string;
@@ -148,6 +156,7 @@ export interface Shot {
   status: ShotStatus;
   refs: ShotRef[];
   voice_refs: ShotVoiceRef[];
+  motion_refs?: ShotMotionRef[];
   prompt_sections: PromptSections;
   dialogue: string[];
   layout_asset_id: string | null;

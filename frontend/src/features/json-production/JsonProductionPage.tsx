@@ -33,6 +33,7 @@ import type {
   JsonProductionDocument,
   JsonProductionAssetValue,
   JsonProductionStoredAsset,
+  JsonProductionVideo,
   JsonShotJobRecord,
   ShotFileMaps,
 } from "./types";
@@ -556,6 +557,57 @@ export function JsonProductionPage({
     }
   };
 
+  const mutateShotVideos = async (
+    mutate: (videos: JsonProductionVideo[]) => JsonProductionVideo[],
+  ) => {
+    if (!projectId || !storyboard || !selected) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const next: JsonProductionDocument = {
+        ...storyboard,
+        shots: storyboard.shots.map((shot) =>
+          shot.id === selected.id
+            ? { ...shot, videos: mutate([...shot.videos]) }
+            : shot,
+        ),
+      };
+      const saved = await putStoryboard(projectId, next);
+      loadGenRef.current += 1;
+      applyStoryboard(saved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onAddVideo = () =>
+    void mutateShotVideos((videos) => {
+      if (videos.length >= 3) return videos;
+      videos.push({ index: videos.length + 1, label: "motion reference" });
+      return videos;
+    });
+
+  const onRemoveVideo = (index: number) =>
+    void mutateShotVideos((videos) =>
+      videos
+        .filter((v) => v.index !== index)
+        .map((v, i) => ({ ...v, index: i + 1 })),
+    ).then(() => {
+      setVideoFiles((prev) => {
+        if (!selected) return prev;
+        const next = new Map(prev);
+        next.set(selected.id, new Map());
+        return next;
+      });
+    });
+
+  const onToggleVideoAudio = (index: number, useAudio: boolean) =>
+    void mutateShotVideos((videos) =>
+      videos.map((v) => (v.index === index ? { ...v, use_audio: useAudio } : v)),
+    );
+
   const onGenerate = async () => {
     if (!projectId || !storyboard || !selected) return;
     const files = filesForShot(pictureFiles, audioFiles, videoFiles, selected.id);
@@ -733,6 +785,9 @@ export function JsonProductionPage({
       onPictureFile={onPictureFile}
       onAudioFile={onAudioFile}
       onVideoFile={onVideoFile}
+      onAddVideo={onAddVideo}
+      onRemoveVideo={onRemoveVideo}
+      onToggleVideoAudio={onToggleVideoAudio}
       onGenerate={() => {
         if (!mobile) setDesktopInspector("output");
         void onGenerate();

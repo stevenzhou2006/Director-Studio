@@ -184,12 +184,10 @@ def _slot_definition(
     else:
         for slot in shot.videos:
             if slot.index == index:
-                definition = {
-                    "kind": kind,
-                    "index": index,
-                    "label": slot.label,
-                    "use_audio": slot.use_audio,
-                }
+                # use_audio is a runtime submit flag, not slot identity: keep it
+                # out of the signature so toggling it never invalidates the
+                # staged video file.
+                definition = {"kind": kind, "index": index, "label": slot.label}
                 if slot.asset_id:
                     definition["asset_id"] = slot.asset_id
                 if slot.file_key:

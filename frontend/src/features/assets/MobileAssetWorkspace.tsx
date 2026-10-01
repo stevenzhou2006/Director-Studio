@@ -15,6 +15,7 @@ const CATEGORIES: { id: MobileAssetCategory; label: string }[] = [
   { id: "scenes", label: "Scenes" },
   { id: "props", label: "Props" },
   { id: "voices", label: "Voices" },
+  { id: "motions", label: "Motions" },
 ];
 
 const WORKFLOW_COPY: Record<Exclude<MobileAssetCategory, "library">, { singular: string; description: string }> = {
@@ -22,6 +23,7 @@ const WORKFLOW_COPY: Record<Exclude<MobileAssetCategory, "library">, { singular:
   scenes: { singular: "Scene", description: "Build a reusable location with consistent viewing angles." },
   props: { singular: "Prop", description: "Turn a story object into a clean reusable reference." },
   voices: { singular: "Voice", description: "Prepare a clean performance sample for casting and H3." },
+  motions: { singular: "Motion", description: "A dance/action clip that conditions smooth H3 movement." },
 };
 
 export function MobileAssetWorkspace() {

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from ..core.library.store import (
     assign_asset_project,
     create_external_asset,
+    create_external_motion_asset,
     create_external_voice_asset,
     delete_asset,
     list_assets,
@@ -22,8 +23,8 @@ from ..core.schemas import LibraryAsset
 
 router = APIRouter(tags=["library"])
 
-KINDS = frozenset({"actors", "costumes", "scenes", "props", "layouts", "voices", "productions"})
-IMPORT_KINDS = frozenset({"actors", "costumes", "scenes", "props", "layouts", "voices"})
+KINDS = frozenset({"actors", "costumes", "scenes", "props", "layouts", "voices", "motions", "productions"})
+IMPORT_KINDS = frozenset({"actors", "costumes", "scenes", "props", "layouts", "voices", "motions"})
 _MAX_IMPORT_BYTES = 40 * 1024 * 1024  # 40 MB
 
 
@@ -118,6 +119,15 @@ async def import_external_asset(
                 project_id=pid,
                 audio_bytes=data,
                 audio_filename=src_name,
+                source_filename=file.filename or src_name,
+            )
+        if kind_n == "motions":
+            return create_external_motion_asset(
+                name=label,
+                notes=(notes or "").strip(),
+                project_id=pid,
+                video_bytes=data,
+                video_filename=src_name,
                 source_filename=file.filename or src_name,
             )
         return create_external_asset(

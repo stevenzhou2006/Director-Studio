@@ -7,6 +7,7 @@ import {
   type JobStatus,
   type PromptSections,
   type Shot,
+  type ShotMotionRef,
   type ShotRef,
   type ShotVoiceRef,
 } from "../../shared/api/types";
@@ -27,7 +28,7 @@ import {
   type H3Provider,
   type H3ProviderStatus,
 } from "./api";
-import { listLibraryAssets, type LibraryAsset } from "../library/api";
+import { importExternalAsset, listLibraryAssets, type LibraryAsset } from "../library/api";
 import { ShotMaterialEditor } from "../director/ShotMaterialEditor";
 import { fetchH3Profiles } from "../../shared/api/client";
 import type { H3ActiveProfile } from "../../shared/api/types";
@@ -207,6 +208,10 @@ export function ProductionPage({
   const [tab, setTab] = useState<DrawerTab>("layout");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [voiceAssets, setVoiceAssets] = useState<LibraryAsset[]>([]);
+  const [motionAssets, setMotionAssets] = useState<LibraryAsset[]>([]);
+  const [draftMotionRefs, setDraftMotionRefs] = useState<ShotMotionRef[]>([]);
+  const [selectedMotionId, setSelectedMotionId] = useState("");
+  const [motionRefsDirty, setMotionRefsDirty] = useState(false);
   const [draftVoiceRefs, setDraftVoiceRefs] = useState<ShotVoiceRef[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
   const [voiceRefsDirty, setVoiceRefsDirty] = useState(false);
@@ -300,6 +305,7 @@ export function ProductionPage({
   useEffect(() => {
     if (!active || !projectId) {
       setVoiceAssets([]);
+      setMotionAssets([]);
       return;
     }
     let cancelled = false;
@@ -309,6 +315,13 @@ export function ProductionPage({
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    listLibraryAssets("motions", projectId)
+      .then((assets) => {
+        if (!cancelled) setMotionAssets(assets);
+      })
+      .catch(() => {
+        if (!cancelled) setMotionAssets([]);
       });
     return () => {
       cancelled = true;
@@ -326,6 +339,9 @@ export function ProductionPage({
       setDraftVoiceRefs([]);
       setSelectedVoiceId("");
       setVoiceRefsDirty(false);
+      setDraftMotionRefs([]);
+      setSelectedMotionId("");
+      setMotionRefsDirty(false);
       return;
     }
     setDraftPrompt({ ...EMPTY_PROMPT_SECTIONS, ...selected.prompt_sections });
@@ -337,8 +353,14 @@ export function ProductionPage({
         .sort((a, b) => a.audio_index - b.audio_index)
         .map((ref, index) => ({ ...ref, audio_index: index + 1 })),
     );
+    setDraftMotionRefs(
+      [...(selected.motion_refs || [])]
+        .sort((a, b) => a.video_index - b.video_index)
+        .map((ref, index) => ({ ...ref, video_index: index + 1 })),
+    );
     setSelectedVoiceId("");
     setVoiceRefsDirty(false);
+    setMotionRefsDirty(false);
   }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Accept Director-side prompt generation for the selected shot, but never
@@ -481,6 +503,45 @@ export function ProductionPage({
 
   const normalizeVoiceRefs = (refs: ShotVoiceRef[]) =>
     refs.map((ref, index) => ({ ...ref, audio_index: index + 1 }));
+
+  const normalizeMotionRefs = (refs: ShotMotionRef[]) =>
+    refs.map((ref, index) => ({ ...ref, video_index: index + 1 }));
+
+  const updateMotionRefs = (refs: ShotMotionRef[]) => {
+    setDraftMotionRefs(normalizeMotionRefs(refs));
+    setMotionRefsDirty(true);
+  };
+
+  const addMotionRef = (asset: LibraryAsset) => {
+    if (draftMotionRefs.length >= 3) return;
+    if (draftMotionRefs.some((ref) => ref.asset_id === asset.id)) return;
+    updateMotionRefs([
+      ...draftMotionRefs,
+      {
+        asset_id: asset.id,
+        video_index: draftMotionRefs.length + 1,
+        file_key: "clip",
+        use_audio: false,
+        notes: "",
+      },
+    ]);
+  };
+
+  const saveMotionRefs = async () => {
+    if (!selected) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const motion_refs = normalizeMotionRefs(draftMotionRefs);
+      replaceShot(await patchShot(selected.id, { motion_refs }));
+      setDraftMotionRefs(motion_refs);
+      setMotionRefsDirty(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const updateVoiceRefs = (refs: ShotVoiceRef[]) => {
     setDraftVoiceRefs(normalizeVoiceRefs(refs));
@@ -1036,6 +1097,129 @@ export function ProductionPage({
                       <div className="actions">
                         <button type="button" className="btn secondary" disabled={busy || jobActive || Boolean(selected.source_audio_path) || !voiceRefsDirty} onClick={saveVoiceRefs}>
                           Save Voice refs
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="motion-ref-editor" aria-label="Motion References">
+                      <div className="refs-section-head">
+                        <div>
+                          <strong>Motion References</strong>
+                          <div className="muted tiny">
+                            A dance/action clip (2-15s) conditions &lt;Video 1&gt;-&lt;Video 3&gt;:
+                            smooth movement arcs while your Pictures keep identity and scene.
+                          </div>
+                        </div>
+                        <span className="voice-slot-count">{draftMotionRefs.length}/3</span>
+                      </div>
+
+                      <div className="voice-picker-row">
+                        <label className="field voice-picker-field">
+                          <span>Add Motion reference</span>
+                          <select
+                            aria-label="Add Motion reference"
+                            value={selectedMotionId}
+                            disabled={busy || jobActive || draftMotionRefs.length >= 3}
+                            onChange={(e) => setSelectedMotionId(e.target.value)}
+                          >
+                            <option value="">Choose from Motion Library…</option>
+                            {motionAssets
+                              .filter((asset) => !draftMotionRefs.some((ref) => ref.asset_id === asset.id))
+                              .map((asset) => (
+                                <option key={asset.id} value={asset.id}>
+                                  {asset.name}
+                                  {asset.meta?.duration_s != null ? ` · ${Math.round(Number(asset.meta.duration_s))}s` : ""}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="btn secondary"
+                          disabled={!selectedMotionId || busy || jobActive || draftMotionRefs.length >= 3}
+                          onClick={() => {
+                            const asset = motionAssets.find((a) => a.id === selectedMotionId);
+                            if (asset) addMotionRef(asset);
+                            setSelectedMotionId("");
+                          }}
+                        >
+                          Add Motion
+                        </button>
+                        <label className="json-upload-control">
+                          <input
+                            type="file"
+                            aria-label="Upload new motion reference"
+                            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.mkv"
+                            disabled={busy || jobActive || !projectId}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0] || null;
+                              e.target.value = "";
+                              if (!file || !projectId) return;
+                              setBusy(true);
+                              importExternalAsset({ file, kind: "motions", projectId })
+                                .then((asset) => {
+                                  setMotionAssets((prev) => [...prev, asset]);
+                                  addMotionRef(asset);
+                                })
+                                .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                                .finally(() => setBusy(false));
+                            }}
+                          />
+                          <span>Upload clip…</span>
+                        </label>
+                      </div>
+
+                      {draftMotionRefs.length === 0 ? (
+                        <p className="empty-copy">No Motion references selected.</p>
+                      ) : (
+                        <div className="voice-ref-list">
+                          {draftMotionRefs.map((ref, index) => {
+                            const asset = motionAssets.find((a) => a.id === ref.asset_id);
+                            const clipUrl = asset?.urls?.[ref.file_key];
+                            return (
+                              <article className="voice-ref-item" key={ref.asset_id}>
+                                <div className="voice-ref-index">Video {index + 1}</div>
+                                <div className="voice-ref-main">
+                                  <div className="voice-ref-title-row">
+                                    <strong>{asset?.name || ref.asset_id}</strong>
+                                    {asset?.meta?.duration_s != null ? (
+                                      <span className="muted tiny">{String(Math.round(Number(asset.meta.duration_s) * 10) / 10)}s</span>
+                                    ) : null}
+                                  </div>
+                                  {clipUrl ? (
+                                    <video controls preload="metadata" muted={!ref.use_audio} src={clipUrl} style={{ maxWidth: 220 }} />
+                                  ) : (
+                                    <div className="muted tiny">Motion clip file is unavailable.</div>
+                                  )}
+                                  <label className="muted tiny" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
+                                    <input
+                                      type="checkbox"
+                                      aria-label={`Video ${index + 1}: feed its soundtrack to H3`}
+                                      checked={ref.use_audio}
+                                      disabled={busy || jobActive}
+                                      onChange={(e) => updateMotionRefs(draftMotionRefs.map((item, itemIndex) =>
+                                        itemIndex === index ? { ...item, use_audio: e.target.checked } : item,
+                                      ))}
+                                    />
+                                    {ref.use_audio
+                                      ? "Also feed this clip's soundtrack to H3"
+                                      : "Motion only — rhythm follows the shot's Audio"}
+                                  </label>
+                                </div>
+                                <div className="voice-ref-actions">
+                                  <button type="button" className="btn secondary compact" aria-label={`Move Video ${index + 1} up`} disabled={index === 0 || busy || jobActive} onClick={() => updateMotionRefs([...draftMotionRefs].map((item, i) => i === index - 1 ? draftMotionRefs[index] : i === index ? draftMotionRefs[index - 1] : item))}>↑</button>
+                                  <button type="button" className="btn secondary compact" aria-label={`Move Video ${index + 1} down`} disabled={index === draftMotionRefs.length - 1 || busy || jobActive} onClick={() => updateMotionRefs([...draftMotionRefs].map((item, i) => i === index + 1 ? draftMotionRefs[index] : i === index ? draftMotionRefs[index + 1] : item))}>↓</button>
+                                  <button type="button" className="btn secondary compact" aria-label={`Remove Video ${index + 1}`} disabled={busy || jobActive} onClick={() => updateMotionRefs(draftMotionRefs.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <div className="actions">
+                        <button type="button" className="btn secondary" disabled={busy || jobActive || !motionRefsDirty} onClick={saveMotionRefs}>
+                          Save Motion refs
                         </button>
                       </div>
                     </section>

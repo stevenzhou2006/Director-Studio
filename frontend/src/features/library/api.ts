@@ -7,7 +7,8 @@ export type LibraryKind =
   | "scenes"
   | "props"
   | "layouts"
-  | "voices";
+  | "voices"
+  | "motions";
 
 export interface LibraryAsset {
   id: string;

@@ -60,6 +60,29 @@ class ShotVoiceRef(BaseModel):
         return self
 
 
+class ShotMotionRef(BaseModel):
+    asset_id: str
+    video_index: int = Field(ge=1, le=3)
+    file_key: str = "clip"
+    # When False the clip contributes motion only; its soundtrack is not fed
+    # to H3 so the shot's <Audio N> drives the rhythm.
+    use_audio: bool = True
+    notes: str = ""
+
+    @field_validator("asset_id", "file_key", "notes")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        return (value or "").strip()
+
+    @model_validator(mode="after")
+    def _require_identity(self) -> "ShotMotionRef":
+        if not self.asset_id:
+            raise ValueError("motion asset_id is required")
+        if not self.file_key:
+            raise ValueError("motion file_key is required")
+        return self
+
+
 class AssetCoverageRecommendation(BaseModel):
     kind: Literal["actor", "scene", "prop", "costume", "layout", "other"]
     asset_id: str | None = None
@@ -138,6 +161,7 @@ class Shot(BaseModel):
     status: ShotStatus = ShotStatus.draft
     refs: list[ShotRef] = Field(default_factory=list)
     voice_refs: list[ShotVoiceRef] = Field(default_factory=list)
+    motion_refs: list[ShotMotionRef] = Field(default_factory=list)
     prompt_sections: PromptSections = Field(default_factory=PromptSections)
     dialogue: list[str] = Field(default_factory=list)
     layout_asset_id: str | None = None

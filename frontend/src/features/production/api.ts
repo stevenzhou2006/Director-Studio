@@ -6,11 +6,12 @@ import type {
   ProjectDetail,
   PromptSections,
   Shot,
+  ShotMotionRef,
   ShotRef,
   ShotVoiceRef,
 } from "../../shared/api/types";
 
-export type { Project, ProjectDetail, PromptSections, Shot, ShotRef, ShotVoiceRef, JobStatus, OutputSlot };
+export type { Project, ProjectDetail, PromptSections, Shot, ShotRef, ShotVoiceRef, ShotMotionRef, JobStatus, OutputSlot };
 
 export async function listProjects(): Promise<Project[]> {
   const res = await fetch("/api/projects");
@@ -35,6 +36,7 @@ export async function patchShot(
   body: {
     refs?: ShotRef[];
     voice_refs?: ShotVoiceRef[];
+    motion_refs?: ShotMotionRef[];
     prompt_sections?: PromptSections;
     duration_s?: number;
     dialogue?: string[];

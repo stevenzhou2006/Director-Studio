@@ -9,6 +9,7 @@ const KIND_LABELS: Record<LibraryKind, string> = {
   costumes: "Costumes",
   layouts: "Layouts",
   voices: "Voices",
+  motions: "Motions",
 };
 
 export function libraryKindLabel(kind: LibraryKind): string {
@@ -32,6 +33,7 @@ export function AssetImportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isVoice = kind === "voices";
+  const isMotion = kind === "motions";
   const label = libraryKindLabel(kind);
   const titleId = `asset-import-${kind}-title`;
 
@@ -106,10 +108,12 @@ export function AssetImportDialog({
             />
           </label>
           <label className="field field-span-2">
-            <span>{isVoice ? "Audio file" : "Image file"}</span>
+            <span>{isMotion ? "Video file" : isVoice ? "Audio file" : "Image file"}</span>
             <input
               type="file"
-              accept={isVoice
+              accept={isMotion
+                ? "video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.mkv"
+                : isVoice
                 ? "audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg"
                 : "image/png,image/jpeg,image/webp,image/gif"}
               disabled={busy}

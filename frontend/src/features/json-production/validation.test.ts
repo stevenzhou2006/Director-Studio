@@ -27,7 +27,7 @@ const VALID_DOCUMENT: JsonProductionDocument = {
           label: "Post-entry blocking and corridor geography",
         },
       ],
-      audio: [],
+      audio: [],      videos: [],
       prompt: {
         subject_definitions: "<Picture 1> defines Lu's identity and wardrobe.",
         summary: "<Picture 2> establishes the corridor composition.",
@@ -166,7 +166,7 @@ describe("validateShotReadiness", () => {
           [1, actorFile],
           [2, layoutFile],
         ]),
-        audio: new Map(),
+        audio: new Map(),        videos: new Map(),
       }),
     ).toEqual([]);
   });
@@ -190,7 +190,7 @@ describe("validateShotReadiness", () => {
     });
     const errors = validateShotReadiness(shot, {
       pictures: new Map([[2, layoutFile]]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(errors).toEqual([]);
   });
@@ -207,7 +207,7 @@ describe("validateShotReadiness", () => {
         [1, actorFile],
         [2, layoutFile],
       ]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(errors.some((e) => /Picture 2|missing.*Picture/i.test(e))).toBe(true);
   });
@@ -225,7 +225,7 @@ describe("validateShotReadiness", () => {
         [1, actorFile],
         [2, layoutFile],
       ]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(errors.some((e) => /Picture 3|undeclared|extra/i.test(e))).toBe(true);
   });
@@ -239,7 +239,7 @@ describe("validateShotReadiness", () => {
         [1, actorFile],
         [2, layoutFile],
       ]),
-      audio: new Map([[1, makeFile("rain.wav", "audio/wav")]]),
+      audio: new Map([[1, makeFile("rain.wav", "audio/wav")]]),      videos: new Map(),
     });
     expect(errors.some((e) => /Audio 1|missing.*Audio/i.test(e))).toBe(true);
   });
@@ -256,7 +256,7 @@ describe("validateShotReadiness", () => {
         [1, actorFile],
         [2, layoutFile],
       ]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(errors.some((e) => /Audio 1|undeclared|extra/i.test(e))).toBe(true);
   });
@@ -265,7 +265,7 @@ describe("validateShotReadiness", () => {
     const shot = cloneShot();
     const errors = validateShotReadiness(shot, {
       pictures: new Map([[1, actorFile]]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(errors.some((e) => /Picture 2|missing.*file|file.*Picture 2/i.test(e))).toBe(
       true,
@@ -284,7 +284,7 @@ describe("validateShotReadiness", () => {
         [1, actorFile],
         [2, layoutFile],
       ]),
-      audio: new Map(),
+      audio: new Map(),      videos: new Map(),
     });
     expect(
       errors.some((e) => /retention_analysis|blank|empty/i.test(e)),

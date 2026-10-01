@@ -18,6 +18,7 @@ class H3Ref2VaJobResponse(BaseModel):
     width: int | None = None
     height: int | None = None
     image_keys: list[str] = Field(default_factory=list)
+    video_keys: list[str] = Field(default_factory=list)
     seed: int | None = None
     fixed_seed: bool = False
     error: str | None = None
@@ -45,6 +46,9 @@ class H3Ref2VaJobResponse(BaseModel):
         image_keys = p.get("image_keys") or []
         if not isinstance(image_keys, list):
             image_keys = []
+        video_keys = p.get("video_keys") or []
+        if not isinstance(video_keys, list):
+            video_keys = []
         frames = p.get("frames")
         try:
             frames_i = int(frames) if frames is not None else None
@@ -66,6 +70,7 @@ class H3Ref2VaJobResponse(BaseModel):
             width=p.get("width"),
             height=p.get("height"),
             image_keys=[str(x) for x in image_keys],
+            video_keys=[str(x) for x in video_keys],
             seed=job.seed,
             fixed_seed=job.fixed_seed,
             error=job.error,

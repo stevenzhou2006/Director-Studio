@@ -13,7 +13,7 @@ from .store import project_dir
 
 STORYBOARD_FILENAME = "production_storyboard.json"
 STORYBOARD_TMP_FILENAME = "production_storyboard.json.tmp"
-ASSET_KIND = Literal["picture", "audio"]
+ASSET_KIND = Literal["picture", "audio", "video"]
 
 _PROMPT_FIELDS = (
     "subject_definitions",
@@ -51,6 +51,16 @@ class JsonProductionAudio(BaseModel):
     file_key: str | None = None
 
 
+class JsonProductionVideo(BaseModel):
+    index: int = Field(ge=1, le=3)
+    label: str = Field(min_length=1)
+    asset_id: str | None = None
+    file_key: str | None = None
+    # When False the reference video's own soundtrack is not fed to H3, so the
+    # clip contributes motion only and the shot's <Audio N> drives the rhythm.
+    use_audio: bool = True
+
+
 class JsonProductionShot(BaseModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
@@ -59,6 +69,7 @@ class JsonProductionShot(BaseModel):
     dialogue: list[str] = Field(default_factory=list)
     pictures: list[JsonProductionPicture] = Field(min_length=1, max_length=9)
     audio: list[JsonProductionAudio] = Field(default_factory=list, max_length=3)
+    videos: list[JsonProductionVideo] = Field(default_factory=list, max_length=3)
     prompt: PromptSections
 
     @model_validator(mode="after")
@@ -70,6 +81,10 @@ class JsonProductionShot(BaseModel):
         audio_indexes = [a.index for a in self.audio]
         if audio_indexes != list(range(1, len(self.audio) + 1)):
             raise ValueError("audio indexes must be contiguous and ordered from 1")
+
+        video_indexes = [v.index for v in self.videos]
+        if video_indexes != list(range(1, len(self.videos) + 1)):
+            raise ValueError("video indexes must be contiguous and ordered from 1")
 
         for name in _PROMPT_FIELDS:
             value = getattr(self.prompt, name)
@@ -157,10 +172,24 @@ def _slot_definition(
                 if slot.file_key:
                     definition["file_key"] = slot.file_key
                 return definition
-    else:
+    elif kind == "audio":
         for slot in shot.audio:
             if slot.index == index:
                 definition = {"kind": kind, "index": index, "label": slot.label}
+                if slot.asset_id:
+                    definition["asset_id"] = slot.asset_id
+                if slot.file_key:
+                    definition["file_key"] = slot.file_key
+                return definition
+    else:
+        for slot in shot.videos:
+            if slot.index == index:
+                definition = {
+                    "kind": kind,
+                    "index": index,
+                    "label": slot.label,
+                    "use_audio": slot.use_audio,
+                }
                 if slot.asset_id:
                     definition["asset_id"] = slot.asset_id
                 if slot.file_key:
@@ -288,6 +317,10 @@ def list_json_production_assets(
                 assets.append(loaded[0])
         for slot in shot.audio:
             loaded = load_json_production_asset(project_id, shot, "audio", slot.index)
+            if loaded:
+                assets.append(loaded[0])
+        for slot in shot.videos:
+            loaded = load_json_production_asset(project_id, shot, "video", slot.index)
             if loaded:
                 assets.append(loaded[0])
     return assets

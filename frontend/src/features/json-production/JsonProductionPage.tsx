@@ -44,17 +44,19 @@ type NestedFileMap = Map<string, ShotFileMaps["pictures"]>;
 type NestedUrlMap = Map<string, Map<number, string>>;
 
 function emptyFiles(): ShotFileMaps {
-  return { pictures: new Map(), audio: new Map() };
+  return { pictures: new Map(), audio: new Map(), videos: new Map() };
 }
 
 function filesForShot(
   pictures: NestedFileMap,
   audio: NestedFileMap,
+  videos: NestedFileMap,
   shotId: string,
 ): ShotFileMaps {
   return {
     pictures: pictures.get(shotId) || new Map(),
     audio: audio.get(shotId) || new Map(),
+    videos: videos.get(shotId) || new Map(),
   };
 }
 
@@ -75,16 +77,19 @@ function setNestedFile(
 function mapsFromStoredAssets(assets: JsonProductionStoredAsset[]): {
   pictures: NestedFileMap;
   audio: NestedFileMap;
+  videos: NestedFileMap;
 } {
   const pictures: NestedFileMap = new Map();
   const audio: NestedFileMap = new Map();
+  const videos: NestedFileMap = new Map();
   for (const asset of assets) {
-    const target = asset.kind === "picture" ? pictures : audio;
+    const target =
+      asset.kind === "picture" ? pictures : asset.kind === "audio" ? audio : videos;
     const shotAssets = new Map(target.get(asset.shot_id) || []);
     shotAssets.set(asset.index, asset);
     target.set(asset.shot_id, shotAssets);
   }
-  return { pictures, audio };
+  return { pictures, audio, videos };
 }
 
 function revokeUrls(urls: NestedUrlMap) {
@@ -143,6 +148,7 @@ export function JsonProductionPage({
   const [busy, setBusy] = useState(false);
   const [pictureFiles, setPictureFiles] = useState<NestedFileMap>(() => new Map());
   const [audioFiles, setAudioFiles] = useState<NestedFileMap>(() => new Map());
+  const [videoFiles, setVideoFiles] = useState<NestedFileMap>(() => new Map());
   const [picturePreviews, setPicturePreviews] = useState<NestedUrlMap>(() => new Map());
   const [jobsByShotId, setJobsByShotId] = useState<Map<string, JsonShotJobRecord[]>>(() => new Map());
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
@@ -185,6 +191,7 @@ export function JsonProductionPage({
     setPicturePreviews(new Map());
     setPictureFiles(new Map());
     setAudioFiles(new Map());
+    setVideoFiles(new Map());
     setJobsByShotId(new Map());
     setPasteText("");
     setPromptDirty(false);
@@ -221,6 +228,7 @@ export function JsonProductionPage({
         const restored = mapsFromStoredAssets(assets);
         setPictureFiles(restored.pictures);
         setAudioFiles(restored.audio);
+        setVideoFiles(restored.videos);
       } catch (e) {
         if (gen !== loadGenRef.current) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -324,6 +332,7 @@ export function JsonProductionPage({
       setPicturePreviews(new Map());
       setPictureFiles(new Map());
       setAudioFiles(new Map());
+      setVideoFiles(new Map());
       setJobsByShotId(new Map());
       setPasteText("");
       setPromptDirty(false);
@@ -412,6 +421,7 @@ export function JsonProductionPage({
 
       const pictureIndexes = new Set(parsed.pictures.map((slot) => slot.index));
       const audioIndexes = new Set(parsed.audio.map((slot) => slot.index));
+      const videoIndexes = new Set(parsed.videos.map((slot) => slot.index));
       setPictureFiles((prev) => {
         const nextFiles = new Map(prev);
         nextFiles.set(
@@ -425,6 +435,14 @@ export function JsonProductionPage({
         nextFiles.set(
           selected.id,
           new Map([...(prev.get(selected.id) || new Map())].filter(([index]) => audioIndexes.has(index))),
+        );
+        return nextFiles;
+      });
+      setVideoFiles((prev) => {
+        const nextFiles = new Map(prev);
+        nextFiles.set(
+          selected.id,
+          new Map([...(prev.get(selected.id) || new Map())].filter(([index]) => videoIndexes.has(index))),
         );
         return nextFiles;
       });
@@ -514,9 +532,33 @@ export function JsonProductionPage({
     }
   };
 
+  const onVideoFile = async (index: number, file: File | null) => {
+    if (!projectId || !selected) return;
+    const previous = videoFiles.get(selected.id)?.get(index) || null;
+    setError(null);
+    setBusy(true);
+    try {
+      if (file) {
+        setVideoFiles((prev) => setNestedFile(prev, selected.id, index, file));
+        const saved = await putJsonShotAsset(
+          projectId, selected.id, "video", index, file,
+        );
+        setVideoFiles((prev) => setNestedFile(prev, selected.id, index, saved));
+      } else {
+        await clearJsonShotAsset(projectId, selected.id, "video", index);
+        setVideoFiles((prev) => setNestedFile(prev, selected.id, index, null));
+      }
+    } catch (e) {
+      setVideoFiles((prev) => setNestedFile(prev, selected.id, index, previous));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onGenerate = async () => {
     if (!projectId || !storyboard || !selected) return;
-    const files = filesForShot(pictureFiles, audioFiles, selected.id);
+    const files = filesForShot(pictureFiles, audioFiles, videoFiles, selected.id);
     if (promptDirty || validateShotReadiness(selected, files).length) return;
     setError(null);
     setBusy(true);
@@ -565,7 +607,7 @@ export function JsonProductionPage({
     }
   };
 
-  const selectedFiles = selected ? filesForShot(pictureFiles, audioFiles, selected.id) : emptyFiles();
+  const selectedFiles = selected ? filesForShot(pictureFiles, audioFiles, videoFiles, selected.id) : emptyFiles();
   const readinessErrors = selected ? validateShotReadiness(selected, selectedFiles) : [];
   const selectedGeneration = latestGeneration(
     jobsByShotId.get(selected?.id || ""),
@@ -585,14 +627,14 @@ export function JsonProductionPage({
         map.set(shot.id, job.status);
         continue;
       }
-      const files = filesForShot(pictureFiles, audioFiles, shot.id);
+      const files = filesForShot(pictureFiles, audioFiles, videoFiles, shot.id);
       const dirty = shot.id === selectedId && promptDirty;
       if (dirty) map.set(shot.id, "unsaved prompt");
       else if (validateShotReadiness(shot, files).length) map.set(shot.id, "missing files");
       else map.set(shot.id, "ready");
     }
     return map;
-  }, [storyboard, jobsByShotId, pictureFiles, audioFiles, selectedId, promptDirty]);
+  }, [storyboard, jobsByShotId, pictureFiles, audioFiles, videoFiles, selectedId, promptDirty]);
 
   const hasShots = (storyboard?.shots.length ?? 0) > 0;
   const mobileReadinessText = selectedJobActive
@@ -690,6 +732,7 @@ export function JsonProductionPage({
       busy={busy}
       onPictureFile={onPictureFile}
       onAudioFile={onAudioFile}
+      onVideoFile={onVideoFile}
       onGenerate={() => {
         if (!mobile) setDesktopInspector("output");
         void onGenerate();

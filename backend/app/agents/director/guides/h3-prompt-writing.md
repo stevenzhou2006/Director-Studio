@@ -113,6 +113,15 @@ In any shot with more than one subject, the non-speaking subject must show a con
 
 Close `detailed_description` on an explicit final state so the next shot can continue from it or QC can verify continuity: each subject's position, posture, and gaze; distance and any contact between them; held props and their state and location; camera framing and light direction. Do not let a subject, a held object, or a contact vanish or teleport between the described end state and the next shot's opening.
 
+## Motion reference videos
+
+A shot may declare up to 3 `<Video N>` motion references (Production storyboard `videos` slots). A motion reference conditions dance/action quality: the model borrows the reference clip's movement arcs, weight transfer, momentum, and motion blur while your Pictures keep identity, scene, and composition.
+
+- Bind each declared `<Video N>` in `retention_analysis` (typically `reference - only the movement quality is borrowed; subject, setting, and camera come from the Pictures`) and reference it in `detailed_description` where the motion happens.
+- When the shot also has `<Audio N>` and the video slot has `use_audio: false`, state explicitly that the dance rhythm follows `<Audio N>` while the movement style follows `<Video N>` — the two channels must not fight over tempo.
+- Motion references do NOT copy the reference subject. Never let a reference video's character, costume, or background leak into the description; identity stays locked to the actor Pictures.
+- For dance clips, prefer one strong full-body motion reference over describing many discrete poses in prose. Describe transitions and flow ("the arm arc continues into the spin, weight rolls onto the left foot"), not frozen pose snapshots.
+
 <!--
 source: MiniMax-AI/MiniMax-H3 skills/h3-prompt-writing (references/ref-en.txt)
 pinned commit: d21241f0a4b3acbb34c97dae47fa417b7065e438 (2026-08-15)

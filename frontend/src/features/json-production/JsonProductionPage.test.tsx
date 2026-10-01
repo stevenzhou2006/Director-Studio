@@ -64,7 +64,7 @@ function makeShot(
       { index: 1, role: "actor", label: "Lu identity and navy wardrobe" },
       { index: 2, role: "layout", label: "Post-entry blocking and corridor geography" },
     ],
-    audio: [],
+    audio: [],    videos: [],
     prompt: { ...SHARED_PROMPT },
     ...overrides,
   };

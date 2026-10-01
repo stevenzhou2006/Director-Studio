@@ -13,6 +13,7 @@ type Props = {
   busy: boolean;
   onPictureFile: (index: number, file: File | null) => void;
   onAudioFile: (index: number, file: File | null) => void;
+  onVideoFile: (index: number, file: File | null) => void;
   onGenerate: () => void;
   onCancel: () => void;
   view?: "all" | "references" | "output";
@@ -29,6 +30,10 @@ export function pictureSlotTitle(index: number, role: JsonPictureRole): string {
 
 export function audioSlotTitle(index: number, label: string): string {
   return label.trim() ? `Audio ${index} · ${label}` : `Audio ${index}`;
+}
+
+export function videoSlotTitle(index: number, label: string): string {
+  return label.trim() ? `Video ${index} · ${label}` : `Video ${index}`;
 }
 
 function finalOutputLink(job: JsonShotJobRecord): { href: string; label: string } | null {
@@ -52,6 +57,7 @@ export function JsonAssetSlots({
   busy,
   onPictureFile,
   onAudioFile,
+  onVideoFile,
   onGenerate,
   onCancel,
   view = "all",
@@ -190,6 +196,71 @@ export function JsonAssetSlots({
           );
         })
       )}
+
+      {shot.videos.length > 0 ? (
+        <>
+          <div className="section-card-head">
+            <h2 className="section-card-title">Motion References</h2>
+          </div>
+          {shot.videos.map((video) => {
+            const title = videoSlotTitle(video.index, video.label);
+            const file = files.videos.get(video.index) || null;
+            const filename = file instanceof File ? file.name : file?.filename;
+            const previewUrl = file ? (file instanceof File ? undefined : file.url) : undefined;
+            return (
+              <div key={`video-${video.index}`} className="field json-asset-slot">
+                <span className="json-asset-slot-title">{title}</span>
+                <p className="field-hint">{video.label}</p>
+                <div className="json-asset-slot-body">
+                  {previewUrl ? (
+                    <video
+                      className="json-asset-preview"
+                      src={previewUrl}
+                      controls
+                      playsInline
+                      muted={video.use_audio === false}
+                    />
+                  ) : null}
+                  <div className="json-asset-slot-footer">
+                    {file ? (
+                      <div className="filename">{filename}</div>
+                    ) : (
+                      <div className="muted tiny json-file-state">No file selected</div>
+                    )}
+                    <div className="json-asset-slot-actions">
+                      <label className="json-upload-control">
+                        <input
+                          type="file"
+                          aria-label={title}
+                          accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.mkv"
+                          onChange={(e) => {
+                            const next = e.target.files?.[0] || null;
+                            e.target.value = "";
+                            if (!next) return;
+                            onVideoFile(video.index, next);
+                          }}
+                        />
+                        <span>{file ? "Replace file" : "Choose file"}</span>
+                      </label>
+                      {file ? (
+                        <button
+                          type="button"
+                          className="btn ghost sm json-asset-clear"
+                          aria-label={`Clear ${title}`}
+                          disabled={busy}
+                          onClick={() => onVideoFile(video.index, null)}
+                        >
+                          Clear
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      ) : null}
 
       {readinessErrors.length ? (
         <ul className="json-readiness-errors">

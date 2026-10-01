@@ -155,6 +155,34 @@ def test_fill_wires_audios_and_preserves_unicode():
     assert "你去地铁站？" in json.dumps(g, ensure_ascii=False)
 
 
+def test_fill_wires_reference_videos_and_pairing_audio():
+    g = fill_ref2va_graph(
+        minimal_graph(),
+        _base_job(
+            videos=["motion.mp4", "dance.mp4"],
+            video_audios=["motion.wav", None],
+        ),
+    )
+    h3 = g["10"]["inputs"]
+    assert h3["ref_videos.ref_video_0"][0] in g
+    assert h3["ref_videos.ref_video_1"][0] in g
+    assert g[h3["ref_videos.ref_video_0"][0]]["class_type"] == "LoadVideo"
+    assert g[h3["ref_videos.ref_video_0"][0]]["inputs"] == {"file": "motion.mp4"}
+    # Index-aligned pairing: only video 0 has a soundtrack.
+    audio_keys = [k for k in h3 if k.startswith("ref_video_audios.")]
+    assert audio_keys == ["ref_video_audios.ref_video_audio_0"]
+    assert g[h3[audio_keys[0]][0]]["class_type"] == "LoadAudio"
+    assert g[h3[audio_keys[0]][0]]["inputs"] == {"audio": "motion.wav"}
+
+
+def test_fill_rejects_too_many_reference_videos():
+    with pytest.raises(ValueError, match="at most 3 videos"):
+        fill_ref2va_graph(
+            minimal_graph(),
+            _base_job(videos=["a.mp4", "b.mp4", "c.mp4", "d.mp4"]),
+        )
+
+
 def test_pipeline_resolves_logical_audio_keys_to_uploaded_names():
     job = JobRecord(
         id="job_voice",

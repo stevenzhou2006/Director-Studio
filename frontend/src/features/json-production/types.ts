@@ -25,6 +25,15 @@ export interface JsonProductionAudio {
   file_key?: string | null;
 }
 
+export interface JsonProductionVideo {
+  index: number;
+  label: string;
+  asset_id?: string | null;
+  file_key?: string | null;
+  /** When false the reference video contributes motion only; its soundtrack is not fed to H3. */
+  use_audio?: boolean;
+}
+
 export interface JsonProductionShot {
   id: string;
   title: string;
@@ -33,6 +42,7 @@ export interface JsonProductionShot {
   dialogue: string[];
   pictures: JsonProductionPicture[];
   audio: JsonProductionAudio[];
+  videos: JsonProductionVideo[];
   prompt: PromptSections;
 }
 
@@ -43,7 +53,7 @@ export interface JsonProductionDocument {
   shots: JsonProductionShot[];
 }
 
-export type JsonProductionAssetKind = "picture" | "audio";
+export type JsonProductionAssetKind = "picture" | "audio" | "video";
 
 export interface JsonProductionStoredAsset {
   shot_id: string;
@@ -61,6 +71,7 @@ export type JsonProductionAssetValue = File | JsonProductionStoredAsset;
 export interface ShotFileMaps {
   pictures: Map<number, JsonProductionAssetValue>;
   audio: Map<number, JsonProductionAssetValue>;
+  videos: Map<number, JsonProductionAssetValue>;
 }
 
 /** H3 job row as returned for JSON Production polling. */

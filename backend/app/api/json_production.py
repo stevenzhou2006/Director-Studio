@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -24,6 +26,7 @@ from ..core.projects import (
     JsonProductionPicture,
     JsonProductionShot,
     JsonProductionStoredAsset,
+    JsonProductionVideo,
     Project,
     delete_json_production_asset,
     list_json_production_assets,
@@ -40,6 +43,37 @@ router = APIRouter(tags=["json-production"])
 
 ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_AUDIO_EXT = {".wav", ".mp3", ".flac", ".m4a"}
+ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv"}
+
+
+def _allowed_ext_for(kind: str) -> set[str]:
+    if kind == "picture":
+        return ALLOWED_IMAGE_EXT
+    if kind == "audio":
+        return ALLOWED_AUDIO_EXT
+    return ALLOWED_VIDEO_EXT
+
+
+def _extract_audio_wav(data: bytes) -> bytes:
+    """Extract a video file's audio track as 16-bit WAV bytes via ffmpeg."""
+    with tempfile.TemporaryDirectory(prefix="ds-ref-video-audio-") as tmp:
+        src = Path(tmp) / "source.mp4"
+        dst = Path(tmp) / "audio.wav"
+        src.write_bytes(data)
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y", "-i", str(src),
+                "-vn", "-acodec", "pcm_s16le", "-ar", "44100", str(dst),
+            ],
+            capture_output=True,
+        )
+        if not dst.is_file() or dst.stat().st_size == 0:
+            raise ValueError(
+                "has no extractable audio track; clear its use-audio flag or "
+                "add a soundtrack"
+                + (f" ({proc.stderr.decode(errors='ignore')[:200]})" if proc.stderr else "")
+            )
+        return dst.read_bytes()
 
 
 def _require_json_project(project_id: str) -> Project:
@@ -109,14 +143,14 @@ async def _read_ordered_uploads(
     return payloads
 
 
-AssetKind = Literal["picture", "audio"]
+AssetKind = Literal["picture", "audio", "video"]
 
 
 def _asset_kind(value: str) -> AssetKind:
     kind = value.strip().lower()
-    if kind not in {"picture", "audio"}:
+    if kind not in {"picture", "audio", "video"}:
         raise HTTPException(400, f"Unsupported asset kind: {value}")
-    return kind
+    return kind  # type: ignore[return-value]
 
 
 _PICTURE_KINDS = {
@@ -131,8 +165,10 @@ _PICTURE_KIND_SEARCH = ("actors", "costumes", "scenes", "props", "layouts")
 
 def _declared_slot(
     shot: JsonProductionShot, kind: AssetKind, index: int
-) -> JsonProductionPicture | JsonProductionAudio | None:
-    slots = shot.pictures if kind == "picture" else shot.audio
+) -> JsonProductionPicture | JsonProductionAudio | JsonProductionVideo | None:
+    slots: list = (
+        shot.pictures if kind == "picture" else shot.audio if kind == "audio" else shot.videos
+    )
     return next((slot for slot in slots if slot.index == index), None)
 
 
@@ -250,7 +286,7 @@ async def put_json_production_asset(
             f"{selected_kind.title()} {index} is linked to library asset "
             f"{slot.asset_id}; clear the asset link to upload a custom file",
         )
-    allowed = ALLOWED_IMAGE_EXT if selected_kind == "picture" else ALLOWED_AUDIO_EXT
+    allowed = _allowed_ext_for(selected_kind)
     payloads = await _read_ordered_uploads([file], allowed=allowed, field=selected_kind)
     filename, data = payloads[0]
     try:
@@ -293,6 +329,7 @@ async def submit_json_shot(
     h3_provider: str | None = Form(None),
     pictures: list[UploadFile] = File(default_factory=list),
     audios: list[UploadFile] = File(default_factory=list),
+    videos: list[UploadFile] = File(default_factory=list),
 ) -> H3Ref2VaJobResponse:
     _require_json_project(project_id)
     document = load_json_production_document(project_id)
@@ -398,14 +435,60 @@ async def submit_json_shot(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    if videos:
+        if len(videos) != len(shot.videos):
+            raise HTTPException(
+                400,
+                f"expected {len(shot.videos)} videos, got {len(videos)}",
+            )
+        video_uploads = await _read_ordered_uploads(
+            videos, allowed=ALLOWED_VIDEO_EXT, field="videos"
+        )
+    else:
+        video_uploads = None
+    video_payloads: list[tuple[str, bytes]] = []
+    video_audio_flags: list[bool] = []
+    for position, slot in enumerate(shot.videos):
+        if slot.asset_id:
+            raise HTTPException(
+                400,
+                f"Video {slot.index} library links are not supported; "
+                "upload the motion reference file directly",
+            )
+        if video_uploads is not None:
+            video_payloads.append(video_uploads[position])
+        else:
+            loaded = load_json_production_asset(
+                project_id, shot, "video", slot.index
+            )
+            if loaded is None:
+                raise HTTPException(400, f"missing staged file for Video {slot.index}")
+            asset, path = loaded
+            video_payloads.append((asset.filename, path.read_bytes()))
+        video_audio_flags.append(slot.use_audio)
+
     landscape = document.aspect_ratio == "16:9"
     images: dict[str, tuple[str, bytes]] = {}
     image_keys = [f"ref_{i}" for i in range(len(picture_payloads))]
     audio_keys = [f"ref_audio_{i}" for i in range(len(audio_payloads))]
+    video_keys: list[str] = []
+    video_audio_keys: list[str] = []
     for key, payload in zip(image_keys, picture_payloads):
         images[key] = payload
     for key, payload in zip(audio_keys, audio_payloads):
         images[key] = payload
+    for index, payload in enumerate(video_payloads):
+        key = f"ref_video_{index}"
+        images[key] = payload
+        video_keys.append(key)
+        if video_audio_flags[index]:
+            try:
+                audio_bytes = _extract_audio_wav(payload[1])
+            except ValueError as exc:
+                raise HTTPException(400, f"Video {index + 1}: {exc}") from exc
+            audio_key = f"ref_video_audio_{index}"
+            images[audio_key] = (f"{audio_key}.wav", audio_bytes)
+            video_audio_keys.append(audio_key)
 
     job = create_job(
         pipeline_id="h3_ref2va",
@@ -420,6 +503,8 @@ async def submit_json_shot(
             "duration_s": shot.duration_s,
             "image_keys": image_keys,
             "audio_keys": audio_keys,
+            "video_keys": video_keys,
+            "video_audio_keys": video_audio_keys,
             "native_audio_key": None,
             "width": 864 if landscape else 480,
             "height": 480 if landscape else 864,

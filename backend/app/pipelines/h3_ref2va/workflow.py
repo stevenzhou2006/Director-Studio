@@ -26,6 +26,7 @@ WORKFLOW_FILENAME = "h3_ref2va.api.json"
 
 MAX_REF_IMAGES = 9
 MAX_REF_AUDIOS = 3
+MAX_REF_VIDEOS = 3
 DEFAULT_STEPS = 20
 DEFAULT_SCHEDULER = "simple"
 DEFAULT_SAMPLER = "res_multistep"
@@ -178,10 +179,16 @@ def fill_profile_graph(
     """Fill only the application-owned boundary declared by an H3 profile."""
     images = list(job_params.get("images") or [])
     audios = list(job_params.get("audios") or [])
+    videos = list(job_params.get("videos") or [])
+    video_audios = list(job_params.get("video_audios") or [])
     if len(images) > MAX_REF_IMAGES:
         raise ValueError(f"at most {MAX_REF_IMAGES} images allowed for H3 Ref2VA")
     if len(audios) > MAX_REF_AUDIOS:
         raise ValueError(f"at most {MAX_REF_AUDIOS} audios allowed for H3 Ref2VA")
+    if len(videos) > MAX_REF_VIDEOS:
+        raise ValueError(f"at most {MAX_REF_VIDEOS} videos allowed for H3 Ref2VA")
+    if len(video_audios) > len(videos):
+        raise ValueError("each reference video audio needs a reference video")
     if str(job_params.get("native_audio") or "").strip():
         raise ValueError(
             "native audio lock is not part of the official ComfyUI workflow"
@@ -258,6 +265,27 @@ def fill_profile_graph(
         input_name = binding.audio_input_pattern.format(index=index)
         h3_inputs[input_name] = [node_id, 0]
 
+    for index, video_name in enumerate(videos):
+        node_id = str(next_id)
+        next_id += 1
+        filled[node_id] = {
+            "class_type": "LoadVideo",
+            "inputs": {"file": video_name},
+            "_meta": {"title": f"Ref Video {index}"},
+        }
+        h3_inputs[f"ref_videos.ref_video_{index}"] = [node_id, 0]
+    for index, video_audio_name in enumerate(video_audios):
+        if not video_audio_name:
+            continue
+        node_id = str(next_id)
+        next_id += 1
+        filled[node_id] = {
+            "class_type": "LoadAudio",
+            "inputs": {"audio": video_audio_name},
+            "_meta": {"title": f"Ref Video Audio {index}"},
+        }
+        h3_inputs[f"ref_video_audios.ref_video_audio_{index}"] = [node_id, 0]
+
     if seed is not None and binding.seed_node_id and binding.seed_input:
         filled[binding.seed_node_id].setdefault("inputs", {})[binding.seed_input] = seed
     if profile.source == "custom":
@@ -316,6 +344,8 @@ def build_ref2va_prompt(
     output_prefix: str | None = None,
     job_id: str | None = None,
     profile: ResolvedH3Profile | None = None,
+    video_names: list[str] | None = None,
+    video_audio_names: list[str | None] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Fill a resolved profile graph and return it with the job's concrete seed."""
     resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
@@ -335,6 +365,8 @@ def build_ref2va_prompt(
             "dialogue": list(dialogue or []),
             "images": list(image_names),
             "audios": list(audio_names or []),
+            "videos": list(video_names or []),
+            "video_audios": list(video_audio_names or []),
             "native_audio": native_audio_name,
             "frames": frames,
             "width": width,

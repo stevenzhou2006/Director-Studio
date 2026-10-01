@@ -216,6 +216,32 @@ class H3Ref2VaPipeline(Pipeline):
             audio_names = p.get("audios") or p.get("audio_names") or []
             if not isinstance(audio_names, list):
                 audio_names = []
+        video_keys = p.get("video_keys") or []
+        video_names = (
+            [
+                uploaded_images[str(key)]
+                for key in video_keys
+                if str(key) in uploaded_images
+            ]
+            if isinstance(video_keys, list)
+            else []
+        )
+        video_audio_keys = p.get("video_audio_keys") or []
+        video_audio_by_key = (
+            {
+                str(key): uploaded_images[str(key)]
+                for key in video_audio_keys
+                if str(key) in uploaded_images
+            }
+            if isinstance(video_audio_keys, list)
+            else {}
+        )
+        # Keep index alignment with videos: slot i's soundtrack is
+        # ref_video_audio_{i}; absent entries stay None.
+        video_audio_names: list[str | None] = [
+            video_audio_by_key.get(f"ref_video_audio_{index}")
+            for index in range(len(video_names))
+        ]
         native_audio_name = None
         native_audio_key = p.get("native_audio_key")
         if native_audio_key:
@@ -236,6 +262,8 @@ class H3Ref2VaPipeline(Pipeline):
             output_prefix=output_prefix,
             job_id=job.id,
             profile=profile,
+            video_names=video_names,
+            video_audio_names=video_audio_names,
         )
 
     def build_api_payload(
@@ -263,6 +291,11 @@ class H3Ref2VaPipeline(Pipeline):
         )
 
         audio_keys = self._ordered_keys(p.get("audio_keys"), inputs)
+        video_keys = self._ordered_keys(p.get("video_keys"), inputs)
+        if video_keys:
+            raise ValueError(
+                "reference videos are only supported on the local ComfyUI H3 provider"
+            )
         overlapping_keys = sorted(set(image_keys) & set(audio_keys))
         if overlapping_keys:
             raise ValueError(

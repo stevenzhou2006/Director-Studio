@@ -5,6 +5,7 @@ import type {
   JsonProductionDocument,
   JsonProductionPicture,
   JsonProductionShot,
+  JsonProductionVideo,
   ShotFileMaps,
 } from "./types";
 
@@ -28,6 +29,7 @@ const PICTURE_ROLES = new Set<JsonPictureRole>([
 
 const PICTURE_TAG_RE = /<Picture\s+(\d+)>/gi;
 const AUDIO_TAG_RE = /<Audio\s+(\d+)>/gi;
+const VIDEO_TAG_RE = /<Video\s+(\d+)>/gi;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -140,6 +142,50 @@ function parseAudio(raw: unknown, shotId: string): JsonProductionAudio[] {
   return audio;
 }
 
+function parseVideos(raw: unknown, shotId: string): JsonProductionVideo[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`shot ${shotId}: videos must be an array`);
+  }
+  if (raw.length > 3) {
+    throw new Error(`shot ${shotId}: videos must have at most 3 slots`);
+  }
+  const videos: JsonProductionVideo[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i];
+    if (!isRecord(item)) {
+      throw new Error(`shot ${shotId}: video slot ${i + 1} must be an object`);
+    }
+    const index = item.index;
+    const label = item.label;
+    if (typeof index !== "number" || !Number.isInteger(index)) {
+      throw new Error(`shot ${shotId}: video slot index must be an integer`);
+    }
+    if (typeof label !== "string" || !label.trim()) {
+      throw new Error(`shot ${shotId}: video ${index} label must be non-empty`);
+    }
+    const videoSlot: JsonProductionVideo = { index, label };
+    if (typeof item.asset_id === "string" && item.asset_id.trim()) {
+      videoSlot.asset_id = item.asset_id;
+    }
+    if (typeof item.file_key === "string" && item.file_key.trim()) {
+      videoSlot.file_key = item.file_key;
+    }
+    if (typeof item.use_audio === "boolean") {
+      videoSlot.use_audio = item.use_audio;
+    }
+    videos.push(videoSlot);
+  }
+  const indexes = videos.map((v) => v.index);
+  const expected = Array.from({ length: videos.length }, (_, i) => i + 1);
+  if (indexes.join(",") !== expected.join(",")) {
+    throw new Error(
+      `shot ${shotId}: video indexes must be contiguous and ordered from 1`,
+    );
+  }
+  return videos;
+}
+
 function parseShot(raw: unknown, position: number): JsonProductionShot {
   if (!isRecord(raw)) {
     throw new Error(`shot at position ${position}: must be an object`);
@@ -180,6 +226,7 @@ function parseShot(raw: unknown, position: number): JsonProductionShot {
     dialogue,
     pictures: parsePictures(raw.pictures, id),
     audio: parseAudio(raw.audio, id),
+    videos: parseVideos(raw.videos, id),
     prompt: parsePrompt(raw.prompt, id),
   };
 }
@@ -274,8 +321,10 @@ export function validateShotReadiness(
   const promptText = collectPromptText(shot.prompt);
   const pictureTags = findTagIndexes(promptText, PICTURE_TAG_RE);
   const audioTags = findTagIndexes(promptText, AUDIO_TAG_RE);
+  const videoTags = findTagIndexes(promptText, VIDEO_TAG_RE);
   const declaredPictures = new Set(shot.pictures.map((p) => p.index));
   const declaredAudio = new Set(shot.audio.map((a) => a.index));
+  const declaredVideos = new Set(shot.videos.map((v) => v.index));
 
   for (const index of declaredPictures) {
     if (!pictureTags.includes(index)) {
@@ -297,6 +346,16 @@ export function validateShotReadiness(
     errors.push(`shot ${shot.id}: undeclared extra <Audio ${index}> tag in prompt`);
   }
 
+  for (const index of declaredVideos) {
+    if (!videoTags.includes(index)) {
+      errors.push(`shot ${shot.id}: missing <Video ${index}> tag in prompt`);
+    }
+  }
+  const extraVideos = [...new Set(videoTags)].filter((i) => !declaredVideos.has(i));
+  for (const index of extraVideos.sort((a, b) => a - b)) {
+    errors.push(`shot ${shot.id}: undeclared extra <Video ${index}> tag in prompt`);
+  }
+
   for (const picture of shot.pictures) {
     if (picture.asset_id) continue;
     if (!files.pictures.has(picture.index)) {
@@ -307,6 +366,12 @@ export function validateShotReadiness(
     if (audio.asset_id) continue;
     if (!files.audio.has(audio.index)) {
       errors.push(`shot ${shot.id}: missing file for Audio ${audio.index}`);
+    }
+  }
+  for (const video of shot.videos) {
+    if (video.asset_id) continue;
+    if (!files.videos.has(video.index)) {
+      errors.push(`shot ${shot.id}: missing file for Video ${video.index}`);
     }
   }
 
